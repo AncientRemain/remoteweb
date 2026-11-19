@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.6.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.7.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -16,7 +16,7 @@ Windows may say "Windows protected your PC" because the app isn't code-signed. C
    - **One-click link (easiest).** A free Cloudflare quick tunnel gives you an `https://….trycloudflare.com` link that works anywhere. No router changes, no account. The app downloads Cloudflare's `cloudflared` tool the first time. The link changes each time it starts; the app always shows the current one, and the tray icon has "Copy remote link".
    - **Your own domain (permanent link).** See "Using your own domain" below.
    - **Tailscale (most private).** Install Tailscale on the PC and on your phone, signed in to the same account. Use the `http://100.x.x.x:8420` link shown on Home. Nobody else can reach it.
-   - **Port forwarding (advanced).** Forward the port on your router and turn on HTTPS in App & network.
+   - **Port forwarding (advanced).** Forward the port on your router and turn on HTTPS in App & updates.
 4. **Connect.** Open a link from Home (or scan its QR code with your phone) and sign in.
 
 The **Setup guide** page in the app has a checklist that ticks itself off, plus fixes for common problems.
@@ -45,12 +45,14 @@ The token is kept in `secrets.json`, never in `config.json`.
 
 ## Updates
 
-The app checks [github.com/AncientRemain/remoteweb](https://github.com/AncientRemain/remoteweb/releases) every few hours. Choose what happens in **App & network → Updates**:
+The app checks [github.com/AncientRemain/remoteweb](https://github.com/AncientRemain/remoteweb/releases) every few hours. Choose what happens in **App & updates → Updates**:
 - **Install automatically** (default): downloads the new version, then installs it once nobody has been connected for a few minutes. The app closes, updates silently and starts again by itself. If remote access was on, it comes back on.
 - **Download, then ask me**: the Home page and the tray show "Restart and update" when it's ready.
 - **Just tell me** / **Off**.
 
 Nothing is downloaded or installed while someone is streaming. A page that is open during an update says so and reconnects by itself.
+
+When a new version is out you hear about it, whatever the mode: a Windows notification (once per version), a banner on Home, an item in the tray menu, and a notice for anyone connected to the stream page, who can install it from Settings → About.
 
 ## Sound
 
@@ -79,7 +81,7 @@ Picture and sound are sent as separate streams, so the browser never delays the 
 
 Plug a controller into the device you're watching on (USB or Bluetooth: school Chromebooks, phones, tablets, Macs and other PCs all work), open the stream page and press any button. Games on your PC see it as a real **Xbox controller**, with **vibration** sent back to the controller in your hand. Up to 4 controllers at once, for local multiplayer. Xbox, PlayStation, Switch Pro and most other controllers work; buttons are matched by position.
 
-- **One-time setup on the PC:** App & network → Controllers → **Install controller driver**. It installs ViGEmBus, the same signed driver Sunshine and DS4Windows use; Windows asks for your approval. The viewing devices need nothing installed.
+- **One-time setup on the PC:** **Controllers → Install controller driver**. It installs ViGEmBus, the same signed driver Sunshine and DS4Windows use; Windows asks for your approval. The viewing devices need nothing installed.
 - **No controller?** On touch screens (phones, tablets, touchscreen Chromebooks) turn on the **on-screen controller** from the controller button in the toolbar: two sticks, A/B/X/Y, D-pad, bumpers, triggers, View and Menu. Tap a stick to click it.
 - The controller button in the toolbar shows which player each controller is and turns vibration on or off.
 - Security → Rules → "Allow game controllers" turns it off for everyone; view-only mode also blocks controllers.
@@ -102,7 +104,7 @@ The mouse pointer still shows on the monitor, and games in exclusive full screen
 
 ## Embedding it in your own website
 
-1. **Security → Embedding**: enter your site's address (for example `https://mysite.com`), or `*` to allow any site.
+1. Embedding is **on by default** (any site may show the page; signing in is still needed). To limit it, enter your sites in **Remote access → Embedding** (for example `https://mysite.com`), or leave it empty to block embedding.
 2. Copy the code shown there and paste it into your page. It looks like this:
    ```html
    <iframe src="https://pc.yourname.com/" allow="fullscreen; autoplay; clipboard-read; clipboard-write; keyboard-map" allowfullscreen style="width:100%;height:600px;border:0"></iframe>
@@ -131,10 +133,10 @@ Chromium's screen capture tops out at about 50–60 frames per second on most PC
 - Dead connections are noticed in seconds (heartbeats both ways), not minutes.
 - If the PC's screen has gone to sleep, the app wakes it before streaming, and says so clearly if the monitor is switched off.
 - Phones on the same Wi-Fi connect directly: the PC offers its real network address to WebRTC.
-- **App & network → Diagnostics** checks that Windows Firewall lets devices on your network in, with a one-click fix.
+- **App & updates → Diagnostics** checks that Windows Firewall lets devices on your network in, with a one-click fix.
 
 **Built for speed**
-- **Stream priority.** While someone is connected, the streaming processes get more CPU time, are never put in Windows' Efficiency mode or timer throttling, and get priority on the graphics card (App & network → Stream priority), so a heavy game can't make the stream stutter.
+- **Stream priority.** While someone is connected, the streaming processes get more CPU time, are never put in Windows' Efficiency mode or timer throttling, and get priority on the graphics card (App & updates → Stream priority), so a heavy game can't make the stream stutter.
 - **No throttling.** The hidden capture window is never slowed down as a "background" page.
 - **Faster mouse.** Mouse movement is sent as soon as it happens (raw pointer updates on https pages), not once per screen refresh.
 - **Small sound buffer.** Sound is buffered as little as possible (12–45 ms in Lowest latency mode).
@@ -146,7 +148,9 @@ Measured on an RTX 5070 PC (1080p60, local network, browser on the same PC):
 
 ## Change anything without code
 
-- Every setting is on the app's pages and lives in **`config.json`** (App & network → Edit config.json). Edit it by hand if you like: the app reloads it as soon as you save. If there's a mistake, the app keeps running on its current settings and tells you what's wrong.
+- **Search** (Ctrl + K in the app) finds any setting, button or help topic and takes you straight to it. The stream page's settings have their own search box too.
+
+- Every setting is on the app's pages and lives in **`config.json`** (App & updates → Edit config.json). Edit it by hand if you like: the app reloads it as soon as you save. If there's a mistake, the app keeps running on its current settings and tells you what's wrong.
 - **Quality presets** (names, resolution, fps, bitrate) can be edited on the Stream quality page or in `config.json`.
 - **Look**: app name, sign-in message, colours, theme, background, corner roundness and font are on the Appearance page.
 - **`custom.css`** (Appearance → Edit custom.css) restyles anything on the browser page and in the app.
@@ -167,7 +171,7 @@ Settings folder: `%APPDATA%\Beam Remote\`.
 
 - The **lock screen** and **UAC prompts** can't be captured or clicked. Don't lock the PC (Win+L) while away; turn on "Keep this PC awake".
 - **Ctrl+Alt+Del** can't be sent; use the Task Manager key instead.
-- To control **programs running as administrator**, use App & network → Restart as administrator.
+- To control **programs running as administrator**, use App & updates → Restart as administrator.
 - If no speakers or headphones are set as the default playback device, there's no sound to capture.
 
 ## For developers

@@ -352,3 +352,30 @@ pre.term { margin: 0; background: var(--bg); color: var(--text-2); border: 1px s
 .toast::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); margin-top: 6px; flex: none; }
 .toast.ok::before { background: var(--good); }
 .toast.error::before { background: var(--bad); }
+
+/* sidebar search, groups */
+.side-nav { display: flex; flex-direction: column; gap: 1px; flex: 1; min-height: 0; }
+.nav-group { padding: 12px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
+.side-nav .nav-group:first-child { padding-top: 2px; }
+.side-search { position: relative; margin: 0 2px 6px; }
+.side-search svg { position: absolute; left: 9px; top: 8px; width: 15px; height: 15px; fill: none; stroke: var(--text-3); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.side-search input { width: 100%; height: 32px; padding: 0 52px 0 30px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; outline: none; }
+.side-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.side-search input::-webkit-search-cancel-button { display: none; }
+.side-search kbd { position: absolute; right: 7px; top: 7px; height: 18px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; font: 500 10.5px/16px var(--font); color: var(--text-3); background: var(--sidebar); pointer-events: none; }
+.side-search input:focus + kbd, .side-search input:not(:placeholder-shown) + kbd { display: none; }
+
+/* search results */
+.results { overflow: hidden; }
+.res { display: flex; width: 100%; gap: 16px; align-items: flex-start; padding: 11px 16px; border: 0; border-top: 1px solid var(--border); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.res:first-child { border-top: 0; }
+.res:hover, .res.sel { background: var(--hover); }
+.res.sel { box-shadow: inset 2px 0 0 var(--accent); }
+.res .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.res .txt b { font-weight: 500; }
+.res .snip { font-size: 12.5px; color: var(--text-2); line-height: 1.45; }
+.res .where { flex: none; max-width: 42%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; color: var(--text-2); text-align: right; }
+.res .where small { font-size: 11px; color: var(--text-3); }
+.res mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
+.flash { animation: flash 1.8s ease-out; }
+@keyframes flash { 0%, 35% { box-shadow: 0 0 0 2px var(--accent); background-color: var(--accent-soft); } 100% { box-shadow: 0 0 0 2px transparent; } }

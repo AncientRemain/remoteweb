@@ -30,6 +30,7 @@
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
     alert: '<path d="M12 3l9.5 16.5h-19z"/><path d="M12 10v4M12 17h.01"/>',
     check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/>',
+    gamepad: '<path d="M6 12h4M8 10v4"/><path d="M15 13h.01M18 11h.01"/><path d="M17.3 6H6.7a4 4 0 0 0-4 3.6l-.9 7.1a2.5 2.5 0 0 0 4.6 1.6L7.5 17h9l1.1 1.3a2.5 2.5 0 0 0 4.6-1.6l-.9-7.1a4 4 0 0 0-4-3.6z"/>',
   };
   const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
@@ -43,11 +44,14 @@
   const hist = new Map(); // client id -> { ping: [], lat: [], last }
   let remoteGuide = localStorage.getItem('remoteGuide') || 'tailscale';
 
+  // id, name, icon, sidebar group
   const PAGES = [
-    ['home', 'Home', 'home'], ['remote', 'Remote access', 'globe'], ['quality', 'Stream quality', 'gauge'],
-    ['security', 'Security', 'shield'], ['browser', 'Browser controls', 'laptop'], ['appearance', 'Appearance', 'palette'],
-    ['app', 'App & network', 'cog'], ['guide', 'Setup guide', 'book'],
+    ['home', 'Home', 'home', 'Overview'], ['guide', 'Setup guide', 'book', 'Overview'],
+    ['remote', 'Remote access', 'globe', 'Connect'], ['security', 'Security & privacy', 'shield', 'Connect'],
+    ['quality', 'Stream quality', 'gauge', 'Stream'], ['controllers', 'Controllers', 'gamepad', 'Stream'], ['browser', 'Browser controls', 'laptop', 'Stream'],
+    ['appearance', 'Appearance', 'palette', 'App'], ['app', 'App & updates', 'cog', 'App'],
   ];
+  const pageName = id => (PAGES.find(p => p[0] === id) || [])[1] || '';
 
   function toast(text, kind = '') {
     const t = document.createElement('div');
@@ -109,7 +113,9 @@
     const tunnelLine = ST.config.network.tunnel === 'none' ? 'Remote access: none'
       : t.state === 'online' ? 'Remote access on' : t.state === 'error' ? 'Remote access problem' : t.state === 'stopped' ? 'Remote access off' : 'Remote access starting';
     const tdot = t.state === 'online' ? 'good' : t.state === 'error' ? 'bad' : t.state === 'stopped' ? '' : 'warn';
-    return PAGES.map(([id, label, ic]) => `<button class="nav-item ${id === page ? 'active' : ''}" data-page="${id}">${icon(ic)}<span>${label}</span>${id === 'home' && n ? `<span class="count live">${n}</span>` : ''}${id === 'guide' && left ? `<span class="count">${left}</span>` : ''}</button>`).join('')
+    const upd = STATUS && STATUS.update && ['available', 'downloading', 'ready'].includes(STATUS.update.state);
+    let group = '';
+    return PAGES.map(([id, label, ic, g]) => `${g !== group ? `<div class="nav-group">${(group = g)}</div>` : ''}<button class="nav-item ${id === page && !searchQuery() ? 'active' : ''}" data-page="${id}">${icon(ic)}<span>${esc(label)}</span>${id === 'home' && n ? `<span class="count live">${n}</span>` : ''}${id === 'guide' && left ? `<span class="count">${left}</span>` : ''}${id === 'app' && upd ? '<span class="count live" title="Update available">1</span>' : ''}</button>`).join('')
       + `<div class="spacer"></div><div class="side-foot">
         <div class="line"><span class="dot ${STATUS && STATUS.server.http ? 'good' : 'bad'}"></span>${STATUS && STATUS.server.http ? `Serving on port ${STATUS.server.http}` : 'Web server stopped'}</div>
         <div class="line"><span class="dot ${tdot}"></span>${tunnelLine}</div>
@@ -125,6 +131,7 @@
     if (e.target.closest('[data-quit]')) { if (confirm('Quit Beam Remote? Nobody will be able to connect until you open it again.')) beam.quit(); return; }
     const b = e.target.closest('[data-page]');
     if (!b) return;
+    clearSearch();
     page = b.dataset.page;
     renderNav();
     render();
@@ -132,7 +139,8 @@
   });
 
   function render() {
-    const fn = { home: pageHome, remote: pageRemote, quality: pageQuality, security: pageSecurity, browser: pageBrowser, appearance: pageAppearance, app: pageApp, guide: pageGuide }[page];
+    if (searchQuery()) { renderSearch(); return; }
+    const fn = PAGE_FNS()[page];
     $('#main').innerHTML = `<div class="page">${fn()}</div>`;
     afterRender();
   }
@@ -159,8 +167,9 @@
     // Parts that change with the live status; only redrawn when their content changed.
     const swap = (sel, html) => { const el = $(sel); if (el && el.dataset.sig !== html) { el.innerHTML = html; el.dataset.sig = html; } };
     if (page === 'home') swap('#alerts', alertsHtml());
-    if (page === 'app') { swap('#update-box', updateHtml()); swap('#fw-value', firewallHtml()); swap('#pads-box', padsHtml()); }
-    if (page === 'security') swap('#embed-box', embedHtml());
+    if (page === 'app') { swap('#update-box', updateHtml()); swap('#fw-value', firewallHtml()); }
+    if (page === 'controllers') swap('#pads-box', padsHtml());
+    if (page === 'remote') swap('#embed-box', embedHtml());
     if (page === 'home') {
       const live = $('#live'); if (live) live.innerHTML = liveHtml();
       const st = $('#status'); if (st) st.innerHTML = statusHtml();
@@ -379,6 +388,12 @@
         <div class="row" style="margin-top:8px"><button class="btn small" data-action="firewall-fix">Allow through Windows Firewall</button></div>`);
     }
     const u = (STATUS && STATUS.update) || {};
+    if (u.latest && u.state === 'available') {
+      out += note('info', `<b>Version ${esc(u.latest)} is available.</b> ${ST.config.app.updates === 'auto' ? 'It downloads and installs by itself once nobody is connected.' : 'Download it now, then restart the app to finish.'}
+        <div class="row" style="margin-top:8px"><button class="btn small primary" data-action="update-download">Download now</button><button class="btn small ghost" data-page-go="app">Update settings</button></div>`);
+    } else if (u.latest && u.state === 'downloading') {
+      out += note('info', `<b>Downloading version ${esc(u.latest)}</b> (${u.progress || 0}%).`);
+    }
     if (u.state === 'ready') {
       out += note('info', `<b>Version ${esc(u.latest)} is ready to install.</b> ${ST.config.app.updates === 'auto' ? 'It installs by itself once nobody has been connected for a few minutes.' : 'Restart the app to finish.'}
         <div class="row" style="margin-top:8px"><button class="btn small primary" data-action="update-install">Restart and update</button></div>`);
@@ -481,7 +496,8 @@
         ${choice('custom', 'Other tool', 'ngrok or any tunnel program.', 'Advanced')}
       </div>
       ${body}
-      ${section('Direct connections', 'WebRTC tries to connect your device straight to this PC, even when you opened a tunnel link, for the lowest latency. These servers help it find a path. If direct connections never work on your networks, add a TURN server; the stream otherwise falls back to the tunnel.', fields(['network.iceServers']))}`;
+      ${section('Direct connections', 'WebRTC tries to connect your device straight to this PC, even when you opened a tunnel link, for the lowest latency. These servers help it find a path. If direct connections never work on your networks, add a TURN server; the stream otherwise falls back to the tunnel.', fields(['network.iceServers']))}
+      ${section('Embedding', 'Show the stream page inside a website with an iframe. On by default: any site may show it, and signing in is still needed.', `${fields(['security.embedOrigins'])}<div id="embed-box">${embedHtml()}</div>`)}`;
   }
 
   // Progress of "Connect with Cloudflare", pushed from the app while it works.
@@ -559,7 +575,7 @@
 
   function pageSecurity() {
     const a = ST.auth;
-    return `<div class="page-head"><div><h1>Security</h1><p>Only someone with your password, and your code if you turn it on, can see or control this PC.</p></div></div>
+    return `<div class="page-head"><div><h1>Security &amp; privacy</h1><p>Only someone with your password, and your code if you turn it on, can see or control this PC.</p></div></div>
       ${section(a.passwordSet ? 'Password' : 'Choose a password', a.passwordSet ? 'Changing it signs every device out.' : 'At least 8 characters. Longer is better; a short sentence works well.',
         `<div class="card pad"><div class="grid2" style="gap:8px"><input class="input" type="password" id="pw-new" placeholder="New password" autocomplete="new-password"><input class="input" type="password" id="pw-confirm" placeholder="Type it again" autocomplete="new-password"></div>
           <div class="strength" id="pw-strength"><i></i></div>
@@ -570,7 +586,6 @@
           : `<div class="statusline"><span class="dot"></span><span class="label">Off</span><span class="msg">Only the password is needed.</span><button class="btn small primary" data-action="totp-on" ${a.passwordSet ? '' : 'disabled'}>Turn on</button></div>`}</div>`)}
       ${section('Rules', '', fields(['security.allowControl', 'security.maxClients', 'security.newClientPolicy', 'security.sessionDays', 'security.maxFailedAttempts', 'security.lockoutMinutes', 'security.notifyOnSignIn', 'security.blockWinKey', 'security.allowedIps']))}
       ${section('Privacy screen', 'What this PC\'s own monitor shows while someone is streaming, so people near the PC can\'t watch. The stream always shows the real screen.', privacyHtml())}
-      ${section('Embedding', 'Show this page inside your own website with an iframe. Enter your site\'s address, or * to allow any site.', `${fields(['security.embedOrigins'])}<div id="embed-box">${embedHtml()}</div>`)}
       ${section('Signed-in devices', 'Browsers that are currently allowed in.',
         `<div class="card rows log">${a.sessions.length ? a.sessions.slice().reverse().map(s => `<div><time>${new Date(s.created).toLocaleDateString()}</time><span class="msg">${esc(s.device || 'Browser')} · ${esc(s.ip)}</span><span class="faint">until ${new Date(s.expires).toLocaleDateString()}</span></div>`).join('') : '<div class="empty">No devices are signed in.</div>'}</div>`,
         `<button class="btn small danger" data-action="signout-all" ${a.sessions.length ? '' : 'disabled'}>Sign out all</button>`)}
@@ -617,7 +632,6 @@
     const sc = [['Ctrl + Alt + Shift + M', 'Show the toolbar'], ['Ctrl + Alt + Shift + S', 'Cycle the stats overlay'], ['Ctrl + Alt + Shift + F', 'Full screen (also captures Windows-key shortcuts in Chrome and Edge)'], ['Esc', 'Release the mouse in game mode'], ['Ctrl + V', 'Paste text from your device into the PC (with clipboard sharing on)']];
     return `<div class="page-head"><div><h1>Browser controls</h1><p>Starting values for every browser. Each device can change these for itself in its own settings.</p></div></div>
       ${section('Mouse, touch and keyboard', '', fields(['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync']))}
-      ${section('Controllers', 'Each device can change these in its own toolbar.', fields(['client.controllerVibration', 'client.touchController']))}
       ${section('Picture adjustments', 'Starting values. Each device can change them in its own settings (Picture), with presets. The viewing browser does this, so it costs this PC and the stream nothing.', fields(['client.picBrightness', 'client.picContrast', 'client.picSaturation', 'client.picHue', 'client.picWarmth', 'client.picSharpen']))}
       ${section('Picture and sound', '', fields(['client.latency', 'client.scaleMode', 'client.smoothing', 'client.sound']))}
       ${section('Overlay and toolbar', '', fields(['client.stats', 'client.statsPosition', 'client.toolbar']))}
@@ -645,7 +659,7 @@
     $('#pv-text').textContent = val('appearance.welcomeText');
   }
 
-  // ------------------------------------------------------------ App & network
+  // ------------------------------------------------------------ App & updates
   const RELEASES = 'https://github.com/AncientRemain/remoteweb/releases';
   function updateHtml() {
     const u = STATUS.update || { state: 'disabled' };
@@ -684,15 +698,24 @@
     return line + list;
   }
 
+  function pageControllers() {
+    return `<div class="page-head"><div><h1>Controllers</h1><p>Game controllers held at the viewing device (USB or Bluetooth: school Chromebooks, phones, tablets, Macs, PCs) work on this PC as Xbox controllers, with vibration. The viewing device needs nothing installed.</p></div></div>
+      ${section('This PC', 'The controller driver is installed once. Connected controllers show up here with their player number.', `<div class="card rows" id="pads-box">${padsHtml()}</div><div style="height:12px"></div>${fields(['security.allowControllers'])}`)}
+      ${section('Each device', 'Starting values; each device can change them from the controller button in its toolbar.', fields(['client.controllerVibration', 'client.touchController']))}
+      ${section('How to use', '', `<div class="card pad"><ol class="steps">
+          <li><b>Connect a controller to the device you watch on</b><p>USB or Bluetooth. Xbox, PlayStation, Switch Pro and most others work; buttons are matched by position.</p></li>
+          <li><b>Open the stream page and press any button</b><p>The controller appears on this PC as Player 1 to 4. Up to 4 controllers at once.</p></li>
+          <li><b>No controller?</b><p>On touch screens, turn on the on-screen controller from the controller button in the toolbar.</p></li>
+        </ol></div>`)}`;
+  }
+
   function pageApp() {
     const ci = ST.capInfo || {};
     const au = STATUS.audio || {};
     const cpu = STATUS.cpu ? `${fmt(STATUS.cpu.total, 1)}%` : '–';
     const kv = (k, v) => `<div><span class="key">${k}</span><span>${v}</span></div>`;
-    return `<div class="page-head"><div><h1>App &amp; network</h1><p>How the app runs on this PC.</p></div></div>
+    return `<div class="page-head"><div><h1>App &amp; updates</h1><p>How the app runs on this PC: startup, updates, the web server and diagnostics.</p></div></div>
       ${section('App', '', fields(['app.startWithWindows', 'app.startMinimized', 'app.closeToTray', 'app.keepAwake', 'app.streamPriority']))}
-      ${section('Controllers', 'Game controllers held at the viewing device (USB or Bluetooth, including school Chromebooks, phones and tablets) work on this PC as Xbox controllers, with vibration. The viewing device needs nothing installed.',
-        `<div class="card rows" id="pads-box">${padsHtml()}</div><div style="height:12px"></div>${fields(['security.allowControllers'])}`)}
       ${section('Updates', 'New versions come from github.com/AncientRemain/remoteweb. Nothing is downloaded while someone is streaming.',
         `<div class="card"><div id="update-box">${updateHtml()}</div>${fieldHtml('app.updates')}</div>`)}
       ${section('Web server', '', fields(['server.port', 'server.bindAddress', 'server.https', 'server.httpsPort']))}
@@ -754,15 +777,188 @@
         </ol></div>`)}
       ${section('Questions and fixes', '', `<div class="card faq">
         <details><summary>The picture is black or frozen</summary><p>Windows hides the lock screen and administrator (UAC) prompts from every screen-capture app. Turn on "Keep this PC awake" and don't lock the PC (Win+L) while you're away. If a game runs in exclusive full screen, switch it to borderless window.</p></details>
-        <details><summary>I can see the screen but can't click some windows</summary><p>Those programs run as administrator. Go to App &amp; network → Restart as administrator.</p></details>
+        <details><summary>I can see the screen but can't click some windows</summary><p>Those programs run as administrator. Go to App &amp; updates → Restart as administrator.</p></details>
         <details><summary>It's laggy or blurry</summary><p>Open the toolbar (move the mouse to the top edge) → Quality, and try Balanced or Data saver. The stats overlay shows ping (the network round trip) and latency (from the PC's screen to yours). On Wi-Fi, a 5 GHz network helps.</p></details>
         <details><summary>It switched to "web stream"</summary><p>WebRTC couldn't find a direct path between your networks, which is common on mobile data and strict work networks, so the stream goes through the tunnel instead. It still works with slightly higher latency. A TURN server (Remote access → Direct connections) can fix it.</p></details>
         <details><summary>How do I type on my phone?</summary><p>Tap the keyboard button in the toolbar. For text that won't paste, use the clipboard button → Type on the PC. The keys button has the Windows key, Alt+Tab, Task Manager and arrow keys.</p></details>
         <details><summary>Sound echoes when I test on this PC</summary><p>The page plays the PC's sound back into itself. Mute the browser tab, or set Sound to "On, and mute this PC's speakers".</p></details>
         <details><summary>Can friends use it?</summary><p>Yes. Give them the installer. Each person installs it on their own PC and chooses their own password; nobody can reach anyone else's PC. Windows may say it's an unrecognised app the first time: More info → Run anyway.</p></details>
-        <details><summary>Can I change things without editing code?</summary><p>Every setting is on these pages and in <code>config.json</code> (App &amp; network → Edit config.json). Presets, colours, the name and the sign-in message can all be changed there, and <code>custom.css</code> restyles anything.</p></details>
+        <details><summary>Can I change things without editing code?</summary><p>Every setting is on these pages and in <code>config.json</code> (App &amp; updates → Edit config.json). Presets, colours, the name and the sign-in message can all be changed there, and <code>custom.css</code> restyles anything.</p></details>
       </div>`)}`;
   }
+
+  const PAGE_FNS = () => ({ home: pageHome, remote: pageRemote, quality: pageQuality, security: pageSecurity, controllers: pageControllers, browser: pageBrowser, appearance: pageAppearance, app: pageApp, guide: pageGuide });
+
+  // ------------------------------------------------------------ search
+  // Finds any setting, section, button or help topic on every page. Matches open their page
+  // and point at the spot. Ctrl+K (or Ctrl+F, or /) jumps to the box.
+  const SYNONYMS = {
+    gamepad: ['controller'], joystick: ['controller'], xbox: ['controller'], playstation: ['controller'], ps5: ['controller'], rumble: ['vibration'], vibrate: ['vibration'],
+    dark: ['theme'], light: ['theme'], colour: ['color', 'accent'], color: ['accent', 'colour'], logo: ['icon', 'app name'],
+    '2fa': ['two-step'], mfa: ['two-step'], otp: ['two-step', 'authenticator'], login: ['sign-in', 'sign in', 'password'], logout: ['sign out'],
+    lag: ['latency'], delay: ['latency'], laggy: ['latency', 'quality'], ping: ['latency', 'ping'],
+    audio: ['sound'], volume: ['sound'], mute: ['sound'], speaker: ['sound'],
+    embed: ['embedding', 'iframe'], iframe: ['embedding'], website: ['embedding', 'domain'],
+    hevc: ['codec'], h265: ['codec'], h264: ['codec'], av1: ['codec'], vp9: ['codec'],
+    fps: ['frame rate', 'fps'], framerate: ['frame rate'], resolution: ['resolution', 'quality'], bitrate: ['bitrate', 'quality'], blurry: ['quality', 'sharpness', 'bitrate'],
+    blackscreen: ['privacy'], black: ['privacy', 'black'], cover: ['privacy'], monitor: ['monitor', 'privacy', 'screen'],
+    startup: ['start when', 'windows'], boot: ['start when'], autostart: ['start when', 'start remote access'],
+    admin: ['administrator'], uac: ['administrator'],
+    update: ['update', 'version'], upgrade: ['update'], version: ['update', 'version'],
+    tunnel: ['remote access', 'tunnel'], cloudflare: ['remote access', 'domain', 'quick link'], ngrok: ['tunnel tool', 'other tool'], vpn: ['tailscale'],
+    brightness: ['brightness', 'picture adjustments'], contrast: ['contrast', 'picture adjustments'], filter: ['picture adjustments'], filters: ['picture adjustments'], saturation: ['saturation', 'picture adjustments'], sharpen: ['sharpness'],
+    cursor: ['cursor', 'mouse'], keys: ['keyboard', 'key'], copy: ['clipboard'], paste: ['clipboard'],
+    notification: ['notify'], notifications: ['notify'], log: ['log'], friends: ['domain', 'installer'],
+  };
+  let searchIndex = null, searchAt = 0, searchSel = 0, searchHits = [];
+  const searchQuery = () => (($('#search') && $('#search').value) || '').trim();
+
+  function buildSearchIndex() {
+    const items = [];
+    const doc = html => new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
+    const text = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+    for (const [id, name] of PAGES) {
+      let d;
+      try { d = doc(PAGE_FNS()[id]()); } catch { continue; }
+      items.push({ page: id, kind: 'Page', title: name, text: text(d.querySelector('.page-head p')), section: '', target: null });
+      d.querySelectorAll('[data-method]').forEach(m => items.push({ page: id, kind: 'Option', title: text(m.querySelector('b')), text: text(m.querySelector('span:not(.radio)')), section: 'How to connect', target: { method: m.dataset.method } }));
+      d.querySelectorAll('.section').forEach(sec => {
+        const h = text(sec.querySelector('.section-head h2'));
+        if (h) items.push({ page: id, kind: 'Section', title: h, text: text(sec.querySelector('.section-head p')), section: '', target: { section: h } });
+        sec.querySelectorAll('.field').forEach(fld => {
+          const label = text(fld.querySelector('.lab b'));
+          if (!label) return;
+          const keyEl = fld.querySelector('[data-key]');
+          items.push({ page: id, kind: 'Setting', title: label, text: text(fld.querySelector('.lab p')), section: h, target: keyEl ? { key: keyEl.dataset.key } : { label } });
+        });
+        sec.querySelectorAll('button[data-action]').forEach(btn => {
+          const t = text(btn);
+          if (t.length > 2 && !items.some(x => x.page === id && x.kind === 'Action' && x.title === t)) items.push({ page: id, kind: 'Action', title: t, text: '', section: h, target: { action: btn.dataset.action, label: t } });
+        });
+        sec.querySelectorAll('details summary').forEach(sm => items.push({ page: id, kind: 'Help', title: text(sm), text: text(sm.parentElement.querySelector('p')), section: h, target: { summary: text(sm) } }));
+        sec.querySelectorAll('ol.steps > li').forEach(li => items.push({ page: id, kind: 'Help', title: text(li.querySelector('b')), text: text(li.querySelector('p')), section: h, target: { section: h } }));
+      });
+    }
+    searchIndex = items;
+    searchAt = Date.now();
+  }
+
+  function runSearch(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    if (!searchIndex || Date.now() - searchAt > 4000) buildSearchIndex();
+    const kindBonus = { Setting: 0.6, Action: 0.5, Option: 0.5, Section: 0.4, Page: 0.3, Help: 0 };
+    const hits = [];
+    for (const it of searchIndex) {
+      const title = it.title.toLowerCase();
+      const rest = `${it.text} ${it.section} ${pageName(it.page)}`.toLowerCase();
+      let score = 0;
+      let ok = true;
+      for (const w of words) {
+        const alts = [w, ...(SYNONYMS[w] || [])];
+        if (title.startsWith(w)) score += 6;
+        else if (alts.some(a => title.includes(a))) score += 4;
+        else if (alts.some(a => rest.includes(a))) score += 1;
+        else { ok = false; break; }
+      }
+      if (ok) hits.push([score + (kindBonus[it.kind] || 0), it]);
+    }
+    return hits.sort((a, b) => b[0] - a[0]).slice(0, 40).map(x => x[1]);
+  }
+
+  function markWords(str, q) {
+    let out = esc(str);
+    for (const w of q.toLowerCase().split(/\s+/).filter(x => x.length > 1)) {
+      out = out.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\  // ------------------------------------------------------------ actions')})`, 'ig'), '<mark>$1</mark>');
+    }
+    return out;
+  }
+
+  function renderSearch() {
+    const q = searchQuery();
+    searchHits = runSearch(q);
+    searchSel = Math.min(searchSel, Math.max(0, searchHits.length - 1));
+    const rows = searchHits.map((it, i) => `<button class="res ${i === searchSel ? 'sel' : ''}" data-res="${i}">
+        <span class="txt"><b>${markWords(it.title, q)}</b>${it.text ? `<span class="snip">${markWords(it.text.length > 150 ? `${it.text.slice(0, 150)}…` : it.text, q)}</span>` : ''}</span>
+        <span class="where">${esc(pageName(it.page))}${it.section ? ` › ${esc(it.section)}` : ''}<small>${it.kind}</small></span></button>`).join('');
+    $('#main').innerHTML = `<div class="page"><div class="page-head"><div><h1>Search</h1><p>${searchHits.length ? `${searchHits.length} match${searchHits.length > 1 ? 'es' : ''}` : 'No matches'} for “${esc(q)}”. Enter opens the highlighted one.</p></div></div>
+      ${searchHits.length ? `<div class="card results">${rows}</div>` : '<div class="card empty">Nothing matches. Try another word, like “controller”, “password”, “quality” or “update”.</div>'}</div>`;
+  }
+
+  function clearSearch() {
+    const box = $('#search');
+    if (box && box.value) { box.value = ''; searchSel = 0; }
+  }
+
+  function openResult(it) {
+    clearSearch();
+    page = it.page;
+    renderNav();
+    render();
+    $('#main').scrollTop = 0;
+    requestAnimationFrame(() => pointAt(it.target));
+  }
+
+  // Scrolls to a setting / button / section on the current page and makes it light up briefly.
+  function pointAt(t) {
+    if (!t) return;
+    const all = sel => [...document.querySelectorAll(sel)];
+    let el = null;
+    if (t.key) el = document.querySelector(`[data-key="${CSS.escape(t.key)}"]`);
+    if (!el && t.action) el = all(`[data-action="${CSS.escape(t.action)}"]`).find(b => !t.label || b.textContent.trim() === t.label) || document.querySelector(`[data-action="${CSS.escape(t.action)}"]`);
+    if (!el && t.method) el = document.querySelector(`[data-method="${CSS.escape(t.method)}"]`);
+    if (!el && t.summary) { const sm = all('details summary').find(x => x.textContent.trim() === t.summary); if (sm) { sm.parentElement.open = true; el = sm.parentElement; } }
+    if (!el && t.section) el = all('.section-head h2').find(h => h.textContent.trim() === t.section);
+    if (!el && t.id) el = document.getElementById(t.id);
+    if (!el && t.label) el = all('.field .lab b').find(b => b.textContent.trim() === t.label);
+    if (!el) return;
+    const box = el.closest('.field, .statusline, details, .choice') || el.closest('.section') || el;
+    box.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    box.classList.remove('flash');
+    void box.offsetWidth;
+    box.classList.add('flash');
+    if (el.matches && el.matches('input, select, textarea')) setTimeout(() => el.focus({ preventScroll: true }), 350);
+  }
+
+  const searchBox = $('#search');
+  searchBox.addEventListener('input', () => { searchSel = 0; renderNav(); render(); $('#main').scrollTop = 0; });
+  searchBox.addEventListener('focus', () => { searchIndex = null; });
+  searchBox.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!searchHits.length) return;
+      searchSel = (searchSel + (e.key === 'ArrowDown' ? 1 : -1) + searchHits.length) % searchHits.length;
+      renderSearch();
+      const r = document.querySelector('.res.sel');
+      if (r) r.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (searchHits[searchSel]) openResult(searchHits[searchSel]);
+    } else if (e.key === 'Escape') {
+      clearSearch(); renderNav(); render(); searchBox.blur();
+    }
+  });
+  $('#main').addEventListener('click', e => {
+    const r = e.target.closest('[data-res]');
+    if (r && searchHits[+r.dataset.res]) openResult(searchHits[+r.dataset.res]);
+  });
+  addEventListener('keydown', e => {
+    const typing = e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName);
+    if ((e.ctrlKey && (e.key === 'k' || e.key === 'K' || e.key === 'f' || e.key === 'F')) || (e.key === '/' && !typing)) {
+      e.preventDefault();
+      searchBox.focus();
+      searchBox.select();
+    }
+  });
+
+  // A Windows notification (e.g. "update available") was clicked: show that spot.
+  beam.onGoto(g => {
+    clearSearch();
+    if (g && g.page) page = g.page;
+    renderNav();
+    render();
+    requestAnimationFrame(() => pointAt({ id: g && g.target }));
+  });
 
   // ------------------------------------------------------------ actions
   $('#main').addEventListener('click', async e => {

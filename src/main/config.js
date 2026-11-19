@@ -8,7 +8,7 @@ const RESOLUTIONS = ['native', '2160p', '1440p', '1080p', '900p', '720p', '540p'
 const FPS = [10, 15, 24, 30, 45, 60, 75, 90, 120, 144, 165, 240];
 
 const DEFAULTS = {
-  version: 2,
+  version: 3,
   server: {
     port: 8420,
     bindAddress: '0.0.0.0',
@@ -25,7 +25,7 @@ const DEFAULTS = {
     blockWinKey: false,
     notifyOnSignIn: true,
     allowedIps: '',
-    embedOrigins: '',
+    embedOrigins: '*',
     allowControllers: true,
   },
   stream: {
@@ -132,8 +132,8 @@ const SCHEMA = {
   'security.notifyOnSignIn': { type: 'bool', label: 'Notify me on this PC when someone signs in' },
   'security.allowedIps': { type: 'text', label: 'Only allow these IP addresses (optional)', help: 'Comma-separated, prefixes allowed, e.g. "192.168.1., 100.". Leave empty to allow any address that knows the password.', placeholder: 'any' },
 
-  'security.allowControllers': { type: 'bool', label: 'Allow game controllers', help: 'Controllers held at the viewing device (also Chromebooks, phones and tablets) work on this PC as Xbox controllers. This PC needs the controller driver once: App & network, Controllers.' },
-  'security.embedOrigins': { type: 'text', max: 1000, label: 'Websites allowed to embed this page', help: 'Comma-separated, e.g. "https://mysite.com, https://dash.example.org", or * to let any website embed it (less safe: any site could frame your sign-in page). Leave empty to block embedding (safest). Embedding only works when the page is opened over https (quick link or your own domain).', placeholder: 'none' },
+  'security.allowControllers': { type: 'bool', label: 'Allow game controllers', help: 'Controllers held at the viewing device (also Chromebooks, phones and tablets) work on this PC as Xbox controllers. This PC needs the controller driver once (Controllers page).' },
+  'security.embedOrigins': { type: 'text', max: 1000, label: 'Websites allowed to embed this page', help: '* (the default) lets any website show this page in a frame; signing in is still needed. Or list sites, e.g. "https://mysite.com, https://dash.example.org". Leave empty to block embedding. Websites can only frame https addresses (a quick link or your own domain).', placeholder: 'none' },
   'stream.display': { type: 'display', label: 'Screen to stream', help: 'You can also switch screens from the browser toolbar.' },
   'stream.resolution': { ...enumOf(RESOLUTIONS, ['Native (full)', '4K (2160p)', '1440p', '1080p', '900p', '720p', '540p', '480p', '360p']), label: 'Resolution', help: 'Biggest picture sent. Lower = less data and lower latency on slow connections. Many graphics cards only hardware-encode up to 1080p; above that the processor does the work.' },
   'stream.fps': { type: 'enumInt', values: FPS, label: 'Frames per second', help: 'Above 60 needs a fast connection and a high-refresh monitor on this PC.' },
@@ -258,7 +258,7 @@ function cleanPresets(list) {
 
 // Builds a full, valid config from whatever was in the file. Problems are listed, not thrown.
 // Files from older versions: settings still at an old default move to the new default.
-const CONFIG_VERSION = 2;
+const CONFIG_VERSION = 3;
 function migrate(raw) {
   if (!raw || typeof raw !== 'object') return false;
   const v = Number(raw.version) || 1;
@@ -267,6 +267,9 @@ function migrate(raw) {
     if (raw.stream.codec === 'H264') raw.stream.codec = 'auto';            // 1.5: HEVC when the device can play it
     if (raw.stream.keyframeSeconds === 3) raw.stream.keyframeSeconds = 30; // 1.5: keyframes on demand
   }
+  // 1.7: embedding is on for everyone (any site may show the page in a frame; signing in
+  // is still needed). A list of specific sites someone entered is kept.
+  if (v < 3 && raw.security && typeof raw.security === 'object' && !String(raw.security.embedOrigins || '').trim()) raw.security.embedOrigins = '*';
   raw.version = CONFIG_VERSION;
   return true;
 }

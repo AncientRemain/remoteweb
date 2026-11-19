@@ -1,7 +1,7 @@
 {
   "name": "beam-remote",
   "productName": "Beam Remote",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Stream and control your whole PC from any web browser, at home or away.",
   "main": "src/main/main.js",
   "author": "Beam Remote",

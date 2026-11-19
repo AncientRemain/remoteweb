@@ -376,6 +376,7 @@
       case 'hoststats': S.hostStats = m.s; break;
       case 'pad': onPadReply(m); break;
       case 'rumble': onRumble(m); break;
+      case 'update': onUpdateInfo(m); break;
       case 'controllers':
         S.controllers = { allowed: !!m.allowed, driver: m.driver };
         if (!S.controllers.allowed) for (const index of [...PADS.keys()]) padRemove(index);
@@ -437,6 +438,7 @@
     S.control = m.control !== false;
     if (m.cover) S.cover = m.cover;
     if (m.controllers) S.controllers = m.controllers;
+    if (m.update) onUpdateInfo(m.update);
     applyAppearance({ ...m.appearance, appName: m.appName });
     applyClientSettings();
     buildToolbar();
@@ -1498,7 +1500,7 @@
       html = '<h4>Controllers</h4>' + (list.length
         ? list.map(([, p]) => `<div class="menu-item static"><span>${esc(p.name)}</span><small>${state(p)}</small></div>`).join('')
         : '<p class="pop-note">Connect a controller to this device (USB or Bluetooth) and press any button. It works on the PC as an Xbox controller.</p>')
-        + (S.controllers && S.controllers.driver === 'missing' ? '<p class="pop-note">Your PC needs its one-time controller driver: on the PC, open the app, then App &amp; network, Controllers.</p>' : '')
+        + (S.controllers && S.controllers.driver === 'missing' ? '<p class="pop-note">Your PC needs its one-time controller driver: on the PC, open the app, then Controllers, Install controller driver.</p>' : '')
         + `<button class="menu-item" data-padopt="vibration"><span>Vibration</span><small>${cfg('controllerVibration') === false ? 'Off' : 'On'}</small></button>`
         + (isTouch ? `<button class="menu-item ${cfg('touchController') === true ? 'active' : ''}" data-padopt="touch"><span>On-screen controller</span><small>${cfg('touchController') === true ? 'Shown' : 'Hidden'}</small></button>` : '');
     } else if (kind === 'cover') {
@@ -1611,7 +1613,7 @@
     renderPanel();
     clearTimeout(S.tbTimer);
   }
-  function closePanel() { $('#panel').hidden = true; showToolbar(1500); }
+  function closePanel() { $('#panel').hidden = true; S.panelSearch = ''; showToolbar(1500); }
 
   // Bitrate slider is logarithmic: fine steps at the low end, big steps at the top.
   const BMIN = 300, BMAX = 150000;
@@ -1691,12 +1693,36 @@
         <span>PC encoder</span><b>${esc(s.encoder || '–')}</b>
         <span>Control</span><b>${S.control ? 'Keyboard and mouse' : 'View only'}</b>
         <span>Version</span><b>${esc((S.welcome && S.welcome.version) || '')}</b></div></div>
+        ${updateRowHtml()}
         <div class="setting"><button class="btn" data-local="reset">Reset this device's settings</button>
         <p class="help">Clears quality, controls and overlay choices saved in this browser. The PC's own settings are not changed.</p></div>`;
     }
+    const q = S.panelSearch || '';
     p.innerHTML = `<div class="panel-head"><h3>Settings</h3><button class="tb-btn" data-close="1" title="Close">${icon('x')}</button></div>
-      <div class="tabs">${TABS.map(([id, label]) => `<button class="tab ${id === tab ? 'active' : ''}" data-tab="${id}">${label}</button>`).join('')}</div>
-      <div class="panel-body">${body}</div>`;
+      <div class="panel-search"><input id="panel-search" type="search" placeholder="Search settings" value="${esc(q)}" spellcheck="false" autocomplete="off" aria-label="Search settings"></div>
+      <div class="tabs" ${q ? 'hidden' : ''}>${TABS.map(([id, label]) => `<button class="tab ${id === tab ? 'active' : ''}" data-tab="${id}">${label}</button>`).join('')}</div>
+      <div class="panel-body">${q ? panelSearchBody(q) : body}</div>`;
+  }
+
+  // Every setting from every tab whose name or description matches all the words typed.
+  const PANEL_SYNONYMS = { lag: ['latency'], delay: ['latency'], gamepad: ['controller'], xbox: ['controller'], vibrate: ['vibration'], rumble: ['vibration'], audio: ['sound'], mute: ['sound'], fps: ['frame rate'], filter: ['brightness', 'contrast', 'saturation', 'hue', 'warmth', 'sharpness'], colour: ['color', 'saturation', 'hue'], color: ['saturation', 'hue'], blurry: ['sharpness', 'quality', 'bitrate'], mouse: ['mouse', 'cursor'], hevc: ['codec'], h264: ['codec'], wifi: ['latency', 'connection'] };
+  function panelSearchBody(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const keys = [...TAB_KEYS.stream, ...TAB_KEYS.controls, ...TAB_KEYS.display, ...PIC_KEYS.map(k => `client.${k}`), ...TAB_KEYS.overlay].filter((k, i, a) => a.indexOf(k) === i);
+    const matches = keys.filter(k => {
+      const r = S.schema[k];
+      if (!r) return false;
+      const hay = `${r.label} ${r.help || ''} ${(r.labels || []).join(' ')}`.toLowerCase();
+      return words.every(w => [w, ...(PANEL_SYNONYMS[w] || [])].some(a => hay.includes(a)));
+    });
+    let html = matches.map(settingHtml).join('');
+    if (words.every(w => 'connection type webrtc websocket direct tunnel'.includes(w))) {
+      const t = wantedTransport();
+      html += `<div class="setting"><label class="title">Connection type (this device)</label><select data-local="transport">
+        ${[['auto', 'Auto (best available)'], ['webrtc', 'WebRTC (direct, lowest latency)'], ['websocket', 'WebSocket (works through any tunnel)']].map(([v, l]) => `<option value="${v}" ${v === t ? 'selected' : ''}>${l}</option>`).join('')}
+        </select></div>`;
+    }
+    return html || `<p class="help" style="margin-top:12px">Nothing matches “${esc(q)}”.</p>`;
   }
 
   $('#panel').addEventListener('click', e => {
@@ -1710,6 +1736,12 @@
       return renderPanel();
     }
     if (b.dataset.picPreset) return applyPicPreset(b.dataset.picPreset);
+    if (b.dataset.local === 'update-install') {
+      if (!confirm('Install the update now? Beam Remote on the PC restarts and this page reconnects by itself in about a minute.')) return;
+      send({ t: 'update-install' });
+      toast(S.update && S.update.state === 'ready' ? 'Installing the update…' : 'Downloading the update; it installs as soon as it is ready.');
+      return;
+    }
     if (b.dataset.local === 'reset') {
       prefs = { client: {} }; savePrefs();
       applyClientSettings(); buildToolbar(); renderPanel();
@@ -1719,6 +1751,15 @@
 
   $('#panel').addEventListener('input', e => {
     const t = e.target;
+    if (t.id === 'panel-search') {
+      S.panelSearch = t.value.trim();
+      const tabs = $('#panel .tabs');
+      if (tabs) tabs.hidden = !!S.panelSearch;
+      const bodyEl = $('#panel .panel-body');
+      if (S.panelSearch) bodyEl.innerHTML = panelSearchBody(S.panelSearch);
+      else { renderPanel(); const box = $('#panel-search'); if (box) box.focus(); }
+      return;
+    }
     if (t.dataset.log) { const out = $('#br-out'); if (out) out.textContent = `${mbps(fromSlider(+t.value))} Mbps`; }
     else if (t.type === 'range') { const out = t.closest('.setting').querySelector('output'); if (out) out.textContent = t.value; }
     // Picture sliders preview live while dragging.
@@ -1827,7 +1868,7 @@
       p.error = m.error;
       if (m.error === 'nodriver' && !padDriverTold) {
         padDriverTold = true;
-        toast('Controllers need a one-time driver on your PC. On the PC, open the app: App & network, Controllers, Install.', 'error');
+        toast('Controllers need a one-time driver on your PC. On the PC, open the app: Controllers, Install controller driver.', 'error');
       } else if (m.error === 'full') toast('Up to 4 controllers can be used at once.');
       buildToolbar();
       return;
@@ -1971,6 +2012,29 @@
     savePrefs();
     applyClientSettings();
     if (!$('#panel').hidden) renderPanel();
+  }
+
+  // ------------------------------------------------------------ updates on the PC
+  // The person connected hears about a new version of Beam Remote on the PC (once per
+  // version) and can install it from Settings, About.
+  function onUpdateInfo(m) {
+    S.update = m;
+    const fresh = m && m.latest && ['available', 'downloading', 'ready'].includes(m.state);
+    if (fresh && S.updateToasted !== m.latest) {
+      S.updateToasted = m.latest;
+      toast(`Beam Remote ${m.latest} is ${m.state === 'ready' ? 'ready to install' : 'available'} for this PC. Settings, About to install it now.`);
+    }
+    if (!$('#panel').hidden && S.panelTab === 'about') renderPanel();
+  }
+
+  function updateRowHtml() {
+    const u = S.update;
+    if (!u || !u.latest || !['available', 'downloading', 'ready', 'installing'].includes(u.state)) return '';
+    const what = u.state === 'installing' ? 'Installing now…' : u.state === 'downloading' ? `Downloading (${u.progress || 0}%)` : u.state === 'ready' ? 'Downloaded, ready to install' : 'Available';
+    const auto = u.mode === 'auto' ? ' It also installs by itself once nobody is connected.' : '';
+    return `<div class="setting"><label class="title">Update for this PC: version ${esc(u.latest)}</label>
+      <p class="help">${what}.${auto}</p>
+      ${u.state === 'installing' ? '' : '<button class="btn" data-local="update-install">Install now</button>'}</div>`;
   }
 
   // ------------------------------------------------------------ go

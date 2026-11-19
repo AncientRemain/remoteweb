@@ -150,7 +150,7 @@ async function boot() {
       try { fs.writeFileSync(path.join(USER_DIR, 'update-resume.json'), JSON.stringify({ tunnel: on, at: Date.now() })); } catch { /* ignore */ }
     },
   });
-  updater.on('status', () => { updateTray(); sendToWindow('beam:status', status()); });
+  updater.on('status', onUpdateStatus);
   updater.start();
   if (justUpdated && Notification.isSupported()) {
     new Notification({ title: config.get('appearance.appName'), body: `Updated to version ${VERSION}.`, icon: path.join(ASSETS, 'icon.png') }).show();
@@ -435,6 +435,7 @@ function welcomeFor(c) {
     version: VERSION,
     schema: clientSchema(),
     secureTunnel: c.tunnel,
+    update: updatePublic(),
     cover: cover.publicState(),
     controllers: controllersInfo(),
   };
@@ -510,6 +511,16 @@ function wireServer() {
     setTimeout(updatePriority, 4000);
   });
 
+  // "Install now" from the stream page (the person connected is normally this PC's owner).
+  server.on('update-install', c => {
+    if (!updater) return;
+    const u = updater.status;
+    if (!u.latest || !['available', 'downloading', 'ready'].includes(u.state)) return;
+    auth.record('update', `${c.device} asked to install version ${u.latest} now.`, c.ip);
+    if (u.state === 'ready') updater.installNow();
+    else { installWhenReady = true; if (u.state === 'available') updater.download(); }
+  });
+
   // The streaming device picks what this PC's monitor shows (for this session only).
   server.on('cover', (c, mode) => {
     if (!config.get('privacy.browserCanChange') || !cover.setOverride(mode)) return;
@@ -557,6 +568,46 @@ function wireServer() {
     lastClipboard = text;
     writeClipboard(text);
   });
+}
+
+// ------------------------------------------------------------------ update notifications
+// Everyone hears about new versions: a Windows notification once per version (saying what
+// will happen in the chosen update mode), the Home page, the tray, and the stream page.
+let installWhenReady = false;
+const notifiedFile = () => path.join(app.getPath('userData'), 'update-notified.json');
+function readNotified() { try { return JSON.parse(fs.readFileSync(notifiedFile(), 'utf8')) || {}; } catch { return {}; } }
+
+function updatePublic() {
+  const u = updater ? updater.status : {};
+  return { state: u.state || 'disabled', latest: u.latest || null, current: VERSION, progress: u.progress || 0, mode: config.get('app.updates') };
+}
+
+function openUpdates() {
+  showWindow();
+  setTimeout(() => sendToWindow('beam:goto', { page: 'app', target: 'update-box' }), 400);
+}
+
+function onUpdateStatus(u) {
+  updateTray();
+  sendToWindow('beam:status', status());
+  if (['available', 'downloading', 'ready', 'installing'].includes(u.state)) server.broadcast({ t: 'update', ...updatePublic() });
+  if (installWhenReady && u.state === 'ready') { installWhenReady = false; updater.installNow(); return; }
+  if (!u.latest || !['available', 'ready'].includes(u.state) || !Notification.isSupported()) return;
+  const mode = config.get('app.updates');
+  if (u.state === 'ready' && mode === 'auto') return; // it installs by itself; "Updated to ..." follows
+  const seen = readNotified();
+  if (seen[u.state] === u.latest) return;
+  seen[u.state] = u.latest;
+  try { fs.writeFileSync(notifiedFile(), JSON.stringify(seen)); } catch { /* ignore */ }
+  const name = config.get('appearance.appName');
+  const body = u.state === 'ready' ? 'Downloaded. Restart the app to finish (App & updates).'
+    : mode === 'auto' ? 'It downloads and installs by itself once nobody is connected.'
+      : mode === 'download' ? "Downloading now. You'll be asked to restart when it's ready."
+        : 'Open the app to download and install it.';
+  const n = new Notification({ title: `${name}: version ${u.latest} ${u.state === 'ready' ? 'is ready' : 'is available'}`, body, icon: path.join(ASSETS, 'icon.png') });
+  n.on('click', openUpdates);
+  if (process.env.BEAM_NO_NOTIFY) { dbg('[notify]', n.title, '|', body); return; } // tests: nothing on screen
+  n.show();
 }
 
 // The capture side follows the latency mode of whoever connected or changed it last.
@@ -967,6 +1018,14 @@ async function screenshotPages(dir) {
   if (!auth.passwordSet) { await shot('wizard'); return; }
   // An entry like "security#embed-box" also scrolls that element into view.
   for (const entry of (process.env.BEAM_SHOT_PAGES || 'home,remote,quality,security,browser,appearance,app,guide').split(',')) {
+    // "search:words" types into the search box; "open:words" also opens the best match.
+    if (/^(search|open):/.test(entry)) {
+      const [kind, words] = [entry.slice(0, entry.indexOf(':')), entry.slice(entry.indexOf(':') + 1)];
+      await win.webContents.executeJavaScript(`(() => { const b = document.getElementById('search'); b.focus(); b.value = ${JSON.stringify(words)}; b.dispatchEvent(new Event('input')); ${kind === 'open' ? "b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));" : ''} })()`);
+      await wait(kind === 'open' ? 650 : 500);
+      await shot(`${kind}-${words.replace(/W+/g, '-')}`);
+      continue;
+    }
     const [id, sel] = entry.split('#');
     await win.webContents.executeJavaScript(`document.querySelector('[data-page="${id}"]').click()`);
     await wait(700);
@@ -1009,6 +1068,7 @@ function updateTray() {
   if (n) items.push({ label: 'Disconnect all devices', click: () => server.kickAll('The PC owner ended the session.') });
   const u = updater ? updater.status : {};
   if (u.state === 'ready') items.push({ type: 'separator' }, { label: `Restart to update to ${u.latest}`, click: () => updater.installNow() });
+  else if (u.latest && (u.state === 'available' || u.state === 'downloading')) items.push({ type: 'separator' }, { label: `Update ${u.latest} available…`, click: () => openUpdates() });
   items.push({ type: 'separator' }, { label: 'Quit', click: quit });
   tray.setContextMenu(Menu.buildFromTemplate(items));
 }

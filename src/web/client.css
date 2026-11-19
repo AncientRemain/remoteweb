@@ -272,3 +272,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .tp-dpad { bottom: 150px; transform: scale(.85); transform-origin: left bottom; }
   .tp-shoulder { top: 60px; }
 }
+
+/* settings drawer search */
+.panel-search { padding: 4px 16px 10px; }
+.panel-search input { width: 100%; height: 32px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid rgba(128, 128, 128, .3); background-color: rgba(0, 0, 0, .2); outline: none; color: inherit; font: inherit; font-size: 13.5px; }
+.panel-search input:focus { border-color: var(--accent); }
+.tabs[hidden] { display: none; }

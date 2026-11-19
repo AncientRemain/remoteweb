@@ -45,4 +45,5 @@ contextBridge.exposeInMainWorld('beam', {
   onState: listen('state'),
   onLog: listen('log'),
   onToast: listen('toast'),
+  onGoto: listen('goto'),
 });

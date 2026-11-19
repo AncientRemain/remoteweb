@@ -153,7 +153,7 @@ test('settings from 1.4 and older move to the new defaults; custom choices stay'
   assert.strictEqual(store.get('stream.codec'), 'auto');
   assert.strictEqual(store.get('stream.keyframeSeconds'), 30);
   assert.strictEqual(store.get('stream.fps'), 30, 'other settings untouched');
-  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).version, 2, 'saved as the new version');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).version, 3, 'saved as the newest version');
   const dir2 = tmp();
   fs.writeFileSync(path.join(dir2, 'config.json'), JSON.stringify({ version: 1, stream: { codec: 'VP9', keyframeSeconds: 5 } }));
   const kept = new ConfigStore(dir2);
@@ -162,4 +162,18 @@ test('settings from 1.4 and older move to the new defaults; custom choices stay'
   const dir3 = tmp();
   fs.writeFileSync(path.join(dir3, 'config.json'), JSON.stringify({ version: 2, stream: { codec: 'H264' } }));
   assert.strictEqual(new ConfigStore(dir3).get('stream.codec'), 'H264', 'a choice made in 1.5 is left alone');
+});
+
+test('1.7 settings upgrade: embedding switched on unless sites were listed', () => {
+  const off = tmp();
+  fs.writeFileSync(path.join(off, 'config.json'), JSON.stringify({ version: 2, security: { embedOrigins: '' } }));
+  assert.strictEqual(new ConfigStore(off).get('security.embedOrigins'), '*');
+  const listed = tmp();
+  fs.writeFileSync(path.join(listed, 'config.json'), JSON.stringify({ version: 2, security: { embedOrigins: 'https://my.site' } }));
+  assert.strictEqual(new ConfigStore(listed).get('security.embedOrigins'), 'https://my.site');
+  const fresh = new ConfigStore(tmp());
+  assert.strictEqual(fresh.get('security.embedOrigins'), '*', 'new installs start with embedding on');
+  const later = tmp();
+  fs.writeFileSync(path.join(later, 'config.json'), JSON.stringify({ version: 3, security: { embedOrigins: '' } }));
+  assert.strictEqual(new ConfigStore(later).get('security.embedOrigins'), '', 'turning it off after the upgrade sticks');
 });
