@@ -68,6 +68,24 @@
       </div>
     </div>
     <div id="netnote" class="surface" role="status" hidden><i class="spinner"></i><span>Reconnecting…</span></div>
+    <!-- On-screen controller for touch screens (works on the PC as an Xbox controller) -->
+    <div id="tpad" hidden aria-hidden="true">
+      <div class="tp-shoulder l"><button data-t="lt">LT</button><button data-b="lb">LB</button></div>
+      <div class="tp-shoulder r"><button data-t="rt">RT</button><button data-b="rb">RB</button></div>
+      <div class="tp-dpad">
+        <button data-b="up"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></button>
+        <button data-b="left"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <button data-b="right"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+        <button data-b="down"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div class="tp-stick" data-stick="l"><div class="tp-knob"></div></div>
+      <div class="tp-stick" data-stick="r"><div class="tp-knob"></div></div>
+      <div class="tp-face"><button data-b="y">Y</button><button data-b="x">X</button><button data-b="b">B</button><button data-b="a">A</button></div>
+      <div class="tp-mid"><button data-b="back">View</button><button data-b="start">Menu</button></div>
+    </div>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="beam-sharpen" color-interpolation-filters="sRGB"><feConvolveMatrix id="beam-sharpen-k" order="3" kernelMatrix="0 0 0 0 1 0 0 0 0" preserveAlpha="true"/></filter>
+    </svg>
     <button id="unmute" class="surface pill-btn" hidden>Turn sound on</button>
     <div id="lock-hint" class="surface pill-btn" hidden>Mouse locked. Press Esc to release.</div>
     <textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Keyboard input"></textarea>

@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.5.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.6.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -69,10 +69,20 @@ Picture and sound are sent as separate streams, so the browser never delays the 
 - **Stats overlay** (`Ctrl + Alt + Shift + S`) shows **ping** (network round trip), **latency** (from the PC's screen to yours), fps, bitrate, packet loss, encode/decode time and the connection route. Choose "Detailed" for graphs.
 - **Phones**: touchpad mode (drag to move the cursor, tap to click, two-finger tap for right-click, two fingers to scroll, pinch to zoom) or direct mode (tap where you want to click). Tap the keyboard button to type. Add the page to your home screen for a full-screen app.
 - **Ctrl + V** pastes the text from your device's clipboard into the PC (when clipboard sharing is on).
+- **Picture adjustments** (Settings → Picture): brightness, contrast, saturation, hue, warmth and sharpness, with presets (Vivid, Cinema, Night, High contrast, Crisp text, Grayscale). The viewing browser does this, so it costs the PC and the stream nothing, and each device keeps its own.
 - **Latency** (toolbar → Quality, or Settings → Stream), per device:
   - **Lowest latency** (default): every frame is shown the moment it arrives, like cloud-gaming services do. Best for games and quick mouse work.
   - **Balanced**: a small buffer that hides stutter on unsteady Wi-Fi.
   - **Smoothest**: a bigger buffer for slow or mobile connections.
+
+## Game controllers
+
+Plug a controller into the device you're watching on (USB or Bluetooth: school Chromebooks, phones, tablets, Macs and other PCs all work), open the stream page and press any button. Games on your PC see it as a real **Xbox controller**, with **vibration** sent back to the controller in your hand. Up to 4 controllers at once, for local multiplayer. Xbox, PlayStation, Switch Pro and most other controllers work; buttons are matched by position.
+
+- **One-time setup on the PC:** App & network → Controllers → **Install controller driver**. It installs ViGEmBus, the same signed driver Sunshine and DS4Windows use; Windows asks for your approval. The viewing devices need nothing installed.
+- **No controller?** On touch screens (phones, tablets, touchscreen Chromebooks) turn on the **on-screen controller** from the controller button in the toolbar: two sticks, A/B/X/Y, D-pad, bumpers, triggers, View and Menu. Tap a stick to click it.
+- The controller button in the toolbar shows which player each controller is and turns vibration on or off.
+- Security → Rules → "Allow game controllers" turns it off for everyone; view-only mode also blocks controllers.
 
 ## Privacy screen
 
@@ -168,13 +178,14 @@ npm start               # run from source
 npm test                # unit tests
 npm run icons           # redraw assets/icon.png / icon.ico
 npm run build:audio     # rebuild assets/beam-audio.exe (uses the C# compiler built into Windows)
+npm run build:pad       # rebuild assets/beam-pad.exe (virtual controllers, same compiler)
 npm run dist            # build the installer into dist/
 npm run release         # build and publish a GitHub release (needs GH_TOKEN or Git signed in to GitHub)
 ```
 
 Developer switches (environment variables):
 - `BEAM_DEBUG=1` writes step markers to `debug.log`.
-- `BEAM_INPUT_DRYRUN=1` logs input instead of sending it to Windows.
+- `BEAM_INPUT_DRYRUN=1` logs input instead of sending it to Windows; `BEAM_PAD_DRYRUN=1` does the same for controllers.
 - `BEAM_SHOT_DIR=<folder>` saves screenshots of every dashboard page.
 - `BEAM_DEV_SCRIPT=<file>` runs a script in the dashboard after it opens.
 - `BEAM_UPDATE_URL=<url>` checks a local folder for updates instead of GitHub (with `latest.yml` in it); `BEAM_UPDATE_DRYRUN=1` stops before installing.
@@ -187,3 +198,4 @@ Layout:
 - `src/web`: the browser page.
 - `src/app`: the dashboard.
 - `tools/beam-audio`: the sound helper's source.
+- `tools/beam-pad`: the virtual-controller helper's source (talks to the ViGEmBus driver).

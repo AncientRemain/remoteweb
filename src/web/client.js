@@ -27,6 +27,7 @@
     power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/>',
     x: '<path d="M18 6L6 18M6 6l12 12"/>',
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    gamepad: '<path d="M6 12h4M8 10v4"/><path d="M15 13h.01M18 11h.01"/><path d="M17.3 6H6.7a4 4 0 0 0-4 3.6l-.9 7.1a2.5 2.5 0 0 0 4.6 1.6L7.5 17h9l1.1 1.3a2.5 2.5 0 0 0 4.6-1.6l-.9-7.1a4 4 0 0 0-4-3.6z"/>',
     eyeoff: '<path d="M3 3l18 18"/><path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 9 4.6 10 7-.5 1.2-1.4 2.6-2.7 3.9M6.5 6.5C4.3 7.9 2.7 10 2 12c1 2.4 5 7 10 7 1.6 0 3.1-.4 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   };
   const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
@@ -334,6 +335,7 @@
   function onMessage(m) {
     switch (m.t) {
       case 'welcome':
+        padsForget(); // a new session on the PC: controllers are announced again
         S.resume = { id: m.id, key: m.resumeKey };
         S.reconnectTries = 0; S.updating = false;
         hideNetNote();
@@ -372,6 +374,13 @@
       case 'wsconfig': onWsConfig(m); break;
       case 'audioconfig': onAudioConfig(m); break;
       case 'hoststats': S.hostStats = m.s; break;
+      case 'pad': onPadReply(m); break;
+      case 'rumble': onRumble(m); break;
+      case 'controllers':
+        S.controllers = { allowed: !!m.allowed, driver: m.driver };
+        if (!S.controllers.allowed) for (const index of [...PADS.keys()]) padRemove(index);
+        updateTouchPad(); buildToolbar();
+        break;
       case 'cover': {
         const before = S.cover && S.cover.mode;
         S.cover = m;
@@ -427,6 +436,7 @@
     S.display = m.display || S.display;
     S.control = m.control !== false;
     if (m.cover) S.cover = m.cover;
+    if (m.controllers) S.controllers = m.controllers;
     applyAppearance({ ...m.appearance, appName: m.appName });
     applyClientSettings();
     buildToolbar();
@@ -493,6 +503,7 @@
     S.firstFrameAt = performance.now();
     S.captureRetries = 0;
     if (S.transport === 'webrtc') rememberRtc(false); // direct works on this network
+    updateTouchPad();
     clearTimeout(S.fallbackTimer);
     hideOverlay();
     layout();
@@ -997,6 +1008,8 @@
     if (S.pc) for (const r of S.pc.getReceivers()) applyBuffer(r);
     if (S.audioEl) S.audioEl.muted = cfg('sound') === false;
     if (S.gain) S.gain.gain.value = cfg('sound') === false ? 0 : 1;
+    applyPicture();
+    updateTouchPad();
   }
 
   function updateCursorStyle() {
@@ -1081,7 +1094,7 @@
     S.pressed.clear(); S.buttons.clear();
   }
   const active = () => !$('#stream').hidden && S.gotFrame && $('#overlay').classList.contains('gone');
-  const uiTarget = t => t && t.closest && t.closest('#toolbar, #pop, #panel, #overlay, #unmute');
+  const uiTarget = t => t && t.closest && t.closest('#toolbar, #pop, #panel, #overlay, #unmute, #tpad');
 
   // keyboard
   const mapCode = (code, e) => {
@@ -1372,6 +1385,7 @@
       ${S.displays.length > 1 ? `<button class="tb-btn" data-act="display" title="Switch screen">${icon('monitor')}</button>` : ''}
       ${isTouch ? `<button class="tb-btn" data-act="keyboard" title="Keyboard">${icon('keyboard')}</button>` : ''}
       <button class="tb-btn" data-act="keys" title="Special keys">${icon('command')}</button>
+      ${S.controllers && S.controllers.allowed && (PADS.size || gamepads().length || isTouch) ? `<button class="tb-btn ${[...PADS.values()].some(p => p.player) ? 'on' : ''}" data-act="pads" title="Controllers">${icon('gamepad')}</button>` : ''}
       ${S.cover && S.cover.allow ? `<button class="tb-btn ${S.cover.mode !== 'normal' && !S.cover.peek ? 'on' : ''}" data-act="cover" title="What this PC's monitor shows">${icon('eyeoff')}</button>` : ''}
       <button class="tb-btn" data-act="clipboard" title="Clipboard and typing">${icon('clipboard')}</button>
       ${isTouch ? '' : `<button class="tb-btn ${locked ? 'on' : ''}" data-act="mouse" title="${locked ? 'Mouse locked for games (click to unlock)' : 'Lock mouse for games'}">${icon(locked ? 'lock' : 'mouse')}</button>`}
@@ -1389,7 +1403,7 @@
     if (!b) return;
     const act = b.dataset.act;
     b.blur(); // so Space / Enter keep going to the PC
-    if (['quality', 'display', 'keys', 'clipboard', 'power', 'cover'].includes(act)) return togglePop(act, b);
+    if (['quality', 'display', 'keys', 'clipboard', 'power', 'cover', 'pads'].includes(act)) return togglePop(act, b);
     closePop();
     if (act === 'keyboard') { kbd.focus(); resetKbd(); }
     if (act === 'mouse') { setClient('mouseMode', cfg('mouseMode') === 'relative' ? 'absolute' : 'relative'); if (cfg('mouseMode') === 'relative') toast('Click the picture to lock the mouse. Press Esc to release it.'); else if (document.pointerLockElement) document.exitPointerLock(); }
@@ -1478,6 +1492,15 @@
         ['balanced', 'Small buffer'],
         ['smooth', 'For weak networks'],
       ].map(([mode, note]) => `<button class="menu-item ${latencyMode() === mode ? 'active' : ''}" data-latency="${mode}"><span>${LATENCY_NAMES[mode]}</span><small>${note}</small></button>`).join('');
+    } else if (kind === 'pads') {
+      const list = [...PADS.entries()];
+      const state = p => (p.error === 'nodriver' ? 'PC needs the driver' : p.error ? 'Not connected' : p.player ? `Player ${p.player}` : 'Connecting…');
+      html = '<h4>Controllers</h4>' + (list.length
+        ? list.map(([, p]) => `<div class="menu-item static"><span>${esc(p.name)}</span><small>${state(p)}</small></div>`).join('')
+        : '<p class="pop-note">Connect a controller to this device (USB or Bluetooth) and press any button. It works on the PC as an Xbox controller.</p>')
+        + (S.controllers && S.controllers.driver === 'missing' ? '<p class="pop-note">Your PC needs its one-time controller driver: on the PC, open the app, then App &amp; network, Controllers.</p>' : '')
+        + `<button class="menu-item" data-padopt="vibration"><span>Vibration</span><small>${cfg('controllerVibration') === false ? 'Off' : 'On'}</small></button>`
+        + (isTouch ? `<button class="menu-item ${cfg('touchController') === true ? 'active' : ''}" data-padopt="touch"><span>On-screen controller</span><small>${cfg('touchController') === true ? 'Shown' : 'Hidden'}</small></button>` : '');
     } else if (kind === 'cover') {
       const cv = S.cover || { choices: [] };
       html = '<h4>This PC\'s monitor</h4>' + cv.choices.map(c => `<button class="menu-item ${c.id === cv.mode ? 'active' : ''}" data-cover="${esc(c.id)}"><span>${esc(c.label)}</span></button>`).join('')
@@ -1525,6 +1548,8 @@
       closePop();
     } else if (d.latency) { closePop(); setLatencyMode(d.latency); }
     else if (d.cover) { closePop(); send({ t: 'cover', mode: d.cover }); }
+    else if (d.padopt === 'vibration') { closePop(); setClient('controllerVibration', cfg('controllerVibration') === false); toast(`Controller vibration ${cfg('controllerVibration') === false ? 'off' : 'on'}`); }
+    else if (d.padopt === 'touch') { closePop(); setClient('touchController', cfg('touchController') !== true); }
     else if (d.open) { closePop(); openPanel(d.open); }
     else if (d.display) { send({ t: 'display', id: d.display }); S.display = d.display; closePop(); toast('Switching screen…'); }
     else if (d.key != null) { sendInput(['c', KEYS[+d.key][1]]); }
@@ -1575,7 +1600,7 @@
   ];
   const TAB_KEYS = {
     stream: ['client.latency', 'stream.resolution', 'stream.fps', 'stream.bitrateKbps', 'stream.codec', 'stream.audio', 'stream.contentHint', 'stream.degradation'],
-    controls: ['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync'],
+    controls: ['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync', 'client.controllerVibration', 'client.touchController'],
     display: ['client.scaleMode', 'client.smoothing', 'client.toolbar', 'client.sound'],
     overlay: ['client.stats', 'client.statsPosition'],
   };
@@ -1650,6 +1675,9 @@
         ${isTouch ? `<p class="help">Touchpad: drag to move · tap to click · double-tap and drag to drag · two-finger tap or long press for right-click · two fingers to scroll · pinch to zoom · three-finger tap for the toolbar.</p>` : ''}</div>`;
     } else if (tab === 'display') {
       body += TAB_KEYS.display.map(settingHtml).join('');
+      body += `<div class="setting"><label class="title">Adjustments</label><div class="chips">${PIC_PRESETS.map(([name, v]) => `<button class="chip-btn ${picPresetActive(v) ? 'active' : ''}" data-pic-preset="${esc(name)}">${esc(name)}</button>`).join('')}</div>
+        <p class="help">Changes only how this device shows the picture. The PC and the stream are not affected.</p></div>`;
+      body += PIC_KEYS.map(k => settingHtml(`client.${k}`)).join('');
     } else if (tab === 'overlay') {
       body += TAB_KEYS.overlay.map(settingHtml).join('');
     } else if (tab === 'about') {
@@ -1681,6 +1709,7 @@
       applyQuality({ resolution: p.resolution, fps: p.fps, bitrateKbps: p.bitrateKbps }, true);
       return renderPanel();
     }
+    if (b.dataset.picPreset) return applyPicPreset(b.dataset.picPreset);
     if (b.dataset.local === 'reset') {
       prefs = { client: {} }; savePrefs();
       applyClientSettings(); buildToolbar(); renderPanel();
@@ -1692,6 +1721,8 @@
     const t = e.target;
     if (t.dataset.log) { const out = $('#br-out'); if (out) out.textContent = `${mbps(fromSlider(+t.value))} Mbps`; }
     else if (t.type === 'range') { const out = t.closest('.setting').querySelector('output'); if (out) out.textContent = t.value; }
+    // Picture sliders preview live while dragging.
+    if (t.dataset.key && t.dataset.key.startsWith('client.pic')) applyPicture({ [t.dataset.key.slice(7)]: Number(t.value) });
   });
 
   $('#panel').addEventListener('change', e => {
@@ -1713,6 +1744,234 @@
     else if (k === 'latency') setLatencyMode(value);
     else setClient(k, value);
   });
+
+  // ------------------------------------------------------------ game controllers
+  // Controllers connected to this device (USB or Bluetooth; Chromebooks, phones, tablets, PCs)
+  // and the on-screen controller become Xbox controllers on the PC. The full state goes out
+  // on every change over the fast channel, and again every 250 ms, so a lost message can never
+  // leave a button held.
+  const XB = { up: 0x0001, down: 0x0002, left: 0x0004, right: 0x0008, start: 0x0010, back: 0x0020, ls: 0x0040, rs: 0x0080, lb: 0x0100, rb: 0x0200, guide: 0x0400, a: 0x1000, b: 0x2000, x: 0x4000, y: 0x8000 };
+  // Browser "standard" layout: button number -> Xbox button (by position, so Nintendo and
+  // PlayStation controllers work the same way).
+  const STD = [['a', 0], ['b', 1], ['x', 2], ['y', 3], ['lb', 4], ['rb', 5], ['back', 8], ['start', 9], ['ls', 10], ['rs', 11], ['up', 12], ['down', 13], ['left', 14], ['right', 15], ['guide', 16]];
+  const TOUCH_PAD = 100;
+  const NEUTRAL = [0, 0, 0, 0, 0, 0, 0];
+  const PADS = new Map(); // index -> { seq, key, sentAt, player, name, error }
+  let padTimer = 0, padFast = null, padDriverTold = false;
+
+  const padsAllowed = () => !!(S.controllers && S.controllers.allowed && S.control && S.gotFrame && !document.hidden);
+  const gamepads = () => { try { return [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(g => g && g.connected); } catch { return []; } };
+
+  function readGamepad(gp) {
+    const pressed = i => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
+    let w = 0;
+    for (const [k, i] of STD) if (pressed(i)) w |= XB[k];
+    const trigger = i => Math.round(clamp(gp.buttons[i] ? gp.buttons[i].value : 0, 0, 1) * 255);
+    const axis = i => Math.round(clamp(gp.axes[i] || 0, -1, 1) * 32767);
+    // Xbox sticks count "up" as positive; browsers count "down" as positive.
+    return [w, trigger(6), trigger(7), axis(0), -axis(1), axis(2), -axis(3)];
+  }
+
+  function padSend(index, st, force) {
+    const p = PADS.get(index);
+    if (!p) return;
+    const key = st.join(',');
+    const now = performance.now();
+    if (!force && key === p.key && now - p.sentAt < 250) return;
+    p.key = key; p.sentAt = now;
+    sendInput(['g', index, ++p.seq, ...st], true);
+  }
+
+  function padAdd(index, name) {
+    PADS.set(index, { seq: 0, key: '', sentAt: 0, player: 0, name: String(name || 'Controller').replace(/\s*\(.*?Vendor.*?\)\s*/i, ' ').trim().slice(0, 60), error: null });
+    sendInput(['gc', index, PADS.get(index).name]);
+    buildToolbar();
+  }
+
+  function padRemove(index) {
+    if (!PADS.delete(index)) return;
+    sendInput(['gd', index]);
+    buildToolbar();
+  }
+
+  function pollPads() {
+    const allowed = padsAllowed();
+    const seen = new Set();
+    for (const gp of gamepads()) {
+      seen.add(gp.index);
+      if (!allowed) continue;
+      if (!PADS.has(gp.index)) padAdd(gp.index, gp.id);
+      padSend(gp.index, readGamepad(gp));
+    }
+    for (const index of [...PADS.keys()]) {
+      if (index === TOUCH_PAD) { if (allowed) padSend(index, touchState()); continue; }
+      if (!seen.has(index)) padRemove(index);
+    }
+    // Poll fast (about 250 times a second) only while a controller is around.
+    const fast = seen.size > 0 || PADS.size > 0;
+    if (fast !== padFast) { padFast = fast; clearInterval(padTimer); padTimer = setInterval(pollPads, fast ? 4 : 500); }
+  }
+  addEventListener('gamepadconnected', () => { padFast = null; pollPads(); });
+  addEventListener('gamepaddisconnected', () => pollPads());
+  // Hidden page: the browser stops updating controllers, so let go of everything.
+  document.addEventListener('visibilitychange', () => { if (document.hidden) for (const index of PADS.keys()) padSend(index, NEUTRAL, true); });
+  pollPads();
+
+  // A new session on the PC (not a resumed one) has none of our controllers yet.
+  function padsForget() { PADS.clear(); padDriverTold = false; buildToolbar(); }
+
+  function onPadReply(m) {
+    const p = PADS.get(m.i);
+    if (!p) return;
+    if (m.error) {
+      p.error = m.error;
+      if (m.error === 'nodriver' && !padDriverTold) {
+        padDriverTold = true;
+        toast('Controllers need a one-time driver on your PC. On the PC, open the app: App & network, Controllers, Install.', 'error');
+      } else if (m.error === 'full') toast('Up to 4 controllers can be used at once.');
+      buildToolbar();
+      return;
+    }
+    const first = !p.player;
+    p.player = m.player || p.player || 1;
+    p.error = null;
+    if (first) toast(m.i === TOUCH_PAD ? `On-screen controller ready · Player ${p.player}` : `Controller connected · Player ${p.player}`);
+    buildToolbar();
+  }
+
+  // Vibration from the game, played on the controller in your hand.
+  const rumbleTimers = new Map();
+  function onRumble(m) {
+    clearInterval(rumbleTimers.get(m.i));
+    rumbleTimers.delete(m.i);
+    if (cfg('controllerVibration') === false) return;
+    if (m.i === TOUCH_PAD) { if ((m.l || m.s) && navigator.vibrate) navigator.vibrate(Math.min(400, 60 + Math.max(m.l, m.s))); return; }
+    const gp = gamepads().find(g => g.index === m.i);
+    const act = gp && gp.vibrationActuator;
+    if (!act) return;
+    if (!m.l && !m.s) { try { act.reset ? act.reset() : act.playEffect('dual-rumble', { duration: 0, weakMagnitude: 0, strongMagnitude: 0 }); } catch { /* ignore */ } return; }
+    const play = () => { try { act.playEffect('dual-rumble', { startDelay: 0, duration: 1000, weakMagnitude: m.s / 255, strongMagnitude: m.l / 255 }).catch(() => {}); } catch { /* ignore */ } };
+    play();
+    rumbleTimers.set(m.i, setInterval(play, 900)); // games set vibration until they change it
+  }
+
+  // ------------------------------------------------------------ on-screen controller
+  const tpad = $('#tpad');
+  const TP = { buttons: 0, lt: 0, rt: 0, l: [0, 0], r: [0, 0], ptr: new Map() };
+  const touchState = () => [TP.buttons, TP.lt, TP.rt, Math.round(TP.l[0] * 32767), Math.round(-TP.l[1] * 32767), Math.round(TP.r[0] * 32767), Math.round(-TP.r[1] * 32767)];
+  const touchPush = () => { if (PADS.has(TOUCH_PAD)) padSend(TOUCH_PAD, touchState(), true); };
+
+  function updateTouchPad() {
+    const want = isTouch && cfg('touchController') === true && padsAllowed();
+    tpad.hidden = !want;
+    if (want && !PADS.has(TOUCH_PAD)) { padAdd(TOUCH_PAD, 'On-screen controller'); padFast = null; pollPads(); }
+    if (!want && PADS.has(TOUCH_PAD)) { padSend(TOUCH_PAD, NEUTRAL, true); padRemove(TOUCH_PAD); }
+  }
+
+  function stickMove(p, e) {
+    let dx = (e.clientX - p.cx) / p.rad, dy = (e.clientY - p.cy) / p.rad;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    if (len > 0.15) p.moved = true;
+    TP[p.stick] = [dx, dy];
+    p.knob.style.transform = `translate(${dx * p.rad * 0.6}px, ${dy * p.rad * 0.6}px)`;
+  }
+
+  tpad.addEventListener('pointerdown', e => {
+    const el = e.target.closest('[data-b], [data-t], [data-stick]');
+    if (!el) return;
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    el.classList.add('on');
+    if (el.dataset.stick) {
+      const r = el.getBoundingClientRect();
+      const p = { stick: el.dataset.stick, cx: r.left + r.width / 2, cy: r.top + r.height / 2, rad: r.width / 2, knob: el.firstElementChild, el, at: performance.now(), moved: false };
+      TP.ptr.set(e.pointerId, p);
+      stickMove(p, e);
+    } else if (el.dataset.t) {
+      TP[el.dataset.t] = 255;
+      TP.ptr.set(e.pointerId, { trig: el.dataset.t, el });
+    } else {
+      TP.buttons |= XB[el.dataset.b];
+      TP.ptr.set(e.pointerId, { btn: el.dataset.b, el });
+    }
+    touchPush();
+  });
+  tpad.addEventListener('pointermove', e => {
+    const p = TP.ptr.get(e.pointerId);
+    if (!p || !p.stick) return;
+    e.preventDefault();
+    stickMove(p, e);
+    touchPush();
+  });
+  const touchEndPad = e => {
+    const p = TP.ptr.get(e.pointerId);
+    if (!p) return;
+    TP.ptr.delete(e.pointerId);
+    p.el.classList.remove('on');
+    if (p.stick) {
+      TP[p.stick] = [0, 0];
+      p.knob.style.transform = '';
+      // A quick tap on a stick clicks it (L3 / R3).
+      if (!p.moved && performance.now() - p.at < 250) {
+        const bit = p.stick === 'l' ? XB.ls : XB.rs;
+        TP.buttons |= bit; touchPush();
+        setTimeout(() => { TP.buttons &= ~bit; touchPush(); }, 90);
+      }
+    } else if (p.trig) TP[p.trig] = 0;
+    else TP.buttons &= ~XB[p.btn];
+    touchPush();
+  };
+  tpad.addEventListener('pointerup', touchEndPad);
+  tpad.addEventListener('pointercancel', touchEndPad);
+  tpad.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ------------------------------------------------------------ picture adjustments
+  // Done by this browser on the picture it shows: costs the PC nothing and doesn't change
+  // the stream. Sharpness uses a small sharpening filter; the rest are standard CSS filters.
+  const PIC_KEYS = ['picBrightness', 'picContrast', 'picSaturation', 'picHue', 'picWarmth', 'picSharpen'];
+  const PIC_NORMAL = { picBrightness: 100, picContrast: 100, picSaturation: 100, picHue: 0, picWarmth: 0, picSharpen: 0 };
+  const PIC_PRESETS = [
+    ['Normal', {}],
+    ['Vivid', { picContrast: 110, picSaturation: 140 }],
+    ['Cinema', { picBrightness: 95, picContrast: 115, picSaturation: 90, picWarmth: 10 }],
+    ['Night', { picBrightness: 85, picContrast: 95, picWarmth: 40 }],
+    ['High contrast', { picContrast: 140, picSaturation: 110 }],
+    ['Crisp text', { picContrast: 105, picSharpen: 50 }],
+    ['Grayscale', { picSaturation: 0 }],
+  ];
+  function picValue(k, over) {
+    const v = Number(over && k in over ? over[k] : cfg(k));
+    return Number.isFinite(v) ? v : PIC_NORMAL[k];
+  }
+  function applyPicture(over) {
+    const v = k => picValue(k, over);
+    const parts = [];
+    const sharp = clamp(v('picSharpen'), 0, 100);
+    if (sharp > 0) {
+      const k = (sharp / 100) * 0.9;
+      $('#beam-sharpen-k').setAttribute('kernelMatrix', `0 ${-k} 0 ${-k} ${1 + 4 * k} ${-k} 0 ${-k} 0`);
+      parts.push('url(#beam-sharpen)');
+    }
+    if (v('picBrightness') !== 100) parts.push(`brightness(${v('picBrightness') / 100})`);
+    if (v('picContrast') !== 100) parts.push(`contrast(${v('picContrast') / 100})`);
+    if (v('picSaturation') !== 100) parts.push(`saturate(${v('picSaturation') / 100})`);
+    if (v('picHue')) parts.push(`hue-rotate(${v('picHue')}deg)`);
+    if (v('picWarmth')) parts.push(`sepia(${v('picWarmth') / 100})`);
+    $('#stage').style.setProperty('--pic', parts.length ? parts.join(' ') : 'none');
+  }
+  function picPresetActive(values) {
+    const want = { ...PIC_NORMAL, ...values };
+    return PIC_KEYS.every(k => picValue(k) === want[k]);
+  }
+  function applyPicPreset(name) {
+    const preset = PIC_PRESETS.find(p => p[0] === name);
+    if (!preset) return;
+    for (const [k, v] of Object.entries({ ...PIC_NORMAL, ...preset[1] })) prefs.client[k] = v;
+    savePrefs();
+    applyClientSettings();
+    if (!$('#panel').hidden) renderPanel();
+  }
 
   // ------------------------------------------------------------ go
   boot();

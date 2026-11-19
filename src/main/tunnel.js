@@ -197,4 +197,4 @@ class Tunnel extends EventEmitter {
   }
 }
 
-module.exports = { Tunnel, findUrl };
+module.exports = { Tunnel, findUrl, download };

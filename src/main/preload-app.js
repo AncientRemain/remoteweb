@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('beam', {
   coverPicture: call('coverPicture'),
   coverClearPicture: call('coverClearPicture'),
   coverTest: call('coverTest'),
+  padDriverInstall: call('padDriverInstall'),
+  padRecheck: call('padRecheck'),
   quit: call('quit'),
   onStatus: listen('status'),
   onState: listen('state'),

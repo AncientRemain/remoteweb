@@ -159,7 +159,7 @@
     // Parts that change with the live status; only redrawn when their content changed.
     const swap = (sel, html) => { const el = $(sel); if (el && el.dataset.sig !== html) { el.innerHTML = html; el.dataset.sig = html; } };
     if (page === 'home') swap('#alerts', alertsHtml());
-    if (page === 'app') { swap('#update-box', updateHtml()); swap('#fw-value', firewallHtml()); }
+    if (page === 'app') { swap('#update-box', updateHtml()); swap('#fw-value', firewallHtml()); swap('#pads-box', padsHtml()); }
     if (page === 'security') swap('#embed-box', embedHtml());
     if (page === 'home') {
       const live = $('#live'); if (live) live.innerHTML = liveHtml();
@@ -314,7 +314,7 @@
       const notes = [h.limit && h.limit !== 'none' ? `Limited by ${esc(h.limit)}` : '', s.loss ? `${fmt(s.loss, 1)}% packet loss` : ''].filter(Boolean).join(' · ') || 'Last 2 minutes';
       return `<div class="card">
         <div class="session-head"><div class="ico">${icon(mobile ? 'phone' : 'monitor')}</div>
-          <div style="flex:1;min-width:0"><b>${esc(c.device)}</b><div class="meta">${c.detached ? '<span class="warn">Reconnecting…</span> · ' : ''}${esc(c.ip)} · ${c.transport === 'webrtc' ? 'WebRTC' : c.transport === 'websocket' ? 'WebSocket' : 'Starting'}${route ? ` · ${esc(route)}` : ''} · ${LATENCY_NAMES[c.latency] || ''} · ${since(c.connectedAt)}</div></div>
+          <div style="flex:1;min-width:0"><b>${esc(c.device)}</b><div class="meta">${c.detached ? '<span class="warn">Reconnecting…</span> · ' : ''}${padCount(c.id) ? `${padCount(c.id)} controller${padCount(c.id) > 1 ? 's' : ''} · ` : ''}${esc(c.ip)} · ${c.transport === 'webrtc' ? 'WebRTC' : c.transport === 'websocket' ? 'WebSocket' : 'Starting'}${route ? ` · ${esc(route)}` : ''} · ${LATENCY_NAMES[c.latency] || ''} · ${since(c.connectedAt)}</div></div>
           <button class="btn small danger" data-action="kick" data-id="${c.id}">Disconnect</button></div>
         <div class="stats">
           ${stat('Ping', fmt(s.ping), 'ms', grade(s.ping, 40, 100))}
@@ -357,6 +357,7 @@
     }
   }
 
+  const padCount = id => ((STATUS.controllers && STATUS.controllers.pads) || []).filter(p => p.clientId === id).length;
   const LATENCY_NAMES = { lowest: 'Lowest latency', balanced: 'Balanced', smooth: 'Smoothest' };
   const grade = (v, good, ok) => (v == null ? '' : v <= good ? 'good' : v <= ok ? 'warn' : 'bad');
   function since(t) {
@@ -616,6 +617,8 @@
     const sc = [['Ctrl + Alt + Shift + M', 'Show the toolbar'], ['Ctrl + Alt + Shift + S', 'Cycle the stats overlay'], ['Ctrl + Alt + Shift + F', 'Full screen (also captures Windows-key shortcuts in Chrome and Edge)'], ['Esc', 'Release the mouse in game mode'], ['Ctrl + V', 'Paste text from your device into the PC (with clipboard sharing on)']];
     return `<div class="page-head"><div><h1>Browser controls</h1><p>Starting values for every browser. Each device can change these for itself in its own settings.</p></div></div>
       ${section('Mouse, touch and keyboard', '', fields(['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync']))}
+      ${section('Controllers', 'Each device can change these in its own toolbar.', fields(['client.controllerVibration', 'client.touchController']))}
+      ${section('Picture adjustments', 'Starting values. Each device can change them in its own settings (Picture), with presets. The viewing browser does this, so it costs this PC and the stream nothing.', fields(['client.picBrightness', 'client.picContrast', 'client.picSaturation', 'client.picHue', 'client.picWarmth', 'client.picSharpen']))}
       ${section('Picture and sound', '', fields(['client.latency', 'client.scaleMode', 'client.smoothing', 'client.sound']))}
       ${section('Overlay and toolbar', '', fields(['client.stats', 'client.statsPosition', 'client.toolbar']))}
       ${section('Keyboard shortcuts', '', `<div class="card rows kv">${sc.map(([k, v]) => `<div><span class="key"><code>${k}</code></span><span>${v}</span></div>`).join('')}</div>`)}`;
@@ -670,6 +673,17 @@
     return 'Not checked <button class="btn ghost small" data-action="firewall-check">Check</button>';
   }
 
+  function padsHtml() {
+    const c = STATUS.controllers || { driver: 'unknown', pads: [] };
+    let line;
+    if (c.driver === 'ready') line = '<div class="statusline"><span class="dot good"></span><span class="label">Driver installed</span><span class="msg">Controllers at the viewing device show up here as Xbox controllers.</span></div>';
+    else if (c.driver === 'missing') line = '<div class="statusline"><span class="dot warn"></span><span class="label">Driver not installed</span><span class="msg">Needed once so games on this PC can see controllers. Windows asks for your approval.</span><button class="btn small primary" data-action="pad-install">Install controller driver</button></div>';
+    else if (c.driver === 'error') line = '<div class="statusline"><span class="dot bad"></span><span class="label">Problem</span><span class="msg">The controller helper could not start.</span><button class="btn small" data-action="pad-recheck">Try again</button></div>';
+    else line = '<div class="statusline"><span class="dot"></span><span class="label">Checking</span><span class="msg">Looking for the controller driver…</span></div>';
+    const list = (c.pads || []).map(p => `<div class="statusline"><span class="dot ${p.plugged ? 'live' : ''}"></span><span class="label">${p.player ? `Player ${p.player}` : 'Connecting'}</span><span class="msg">${esc(p.name)}${p.device ? ` · ${esc(p.device)}` : ''}</span></div>`).join('');
+    return line + list;
+  }
+
   function pageApp() {
     const ci = ST.capInfo || {};
     const au = STATUS.audio || {};
@@ -677,6 +691,8 @@
     const kv = (k, v) => `<div><span class="key">${k}</span><span>${v}</span></div>`;
     return `<div class="page-head"><div><h1>App &amp; network</h1><p>How the app runs on this PC.</p></div></div>
       ${section('App', '', fields(['app.startWithWindows', 'app.startMinimized', 'app.closeToTray', 'app.keepAwake', 'app.streamPriority']))}
+      ${section('Controllers', 'Game controllers held at the viewing device (USB or Bluetooth, including school Chromebooks, phones and tablets) work on this PC as Xbox controllers, with vibration. The viewing device needs nothing installed.',
+        `<div class="card rows" id="pads-box">${padsHtml()}</div><div style="height:12px"></div>${fields(['security.allowControllers'])}`)}
       ${section('Updates', 'New versions come from github.com/AncientRemain/remoteweb. Nothing is downloaded while someone is streaming.',
         `<div class="card"><div id="update-box">${updateHtml()}</div>${fieldHtml('app.updates')}</div>`)}
       ${section('Web server', '', fields(['server.port', 'server.bindAddress', 'server.https', 'server.httpsPort']))}
@@ -783,6 +799,15 @@
         if (!STATUS.clients.length || confirm('Restart now to install the update? Connected devices drop for a moment and reconnect by themselves.')) beam.updateInstall();
         break;
       case 'firewall-check': await beam.firewallCheck(); break;
+      case 'pad-install': {
+        b.disabled = true;
+        b.textContent = 'Installing…';
+        const r = await beam.padDriverInstall();
+        if (r && r.ok) toast('Controller driver installed. Controllers work now.', 'ok');
+        else toast((r && r.error) || 'The controller driver was not installed.', 'error');
+        break;
+      }
+      case 'pad-recheck': await beam.padRecheck(); break;
       case 'cover-picture': {
         const r = await beam.coverPicture();
         if (r && r.error) toast(r.error, 'error');

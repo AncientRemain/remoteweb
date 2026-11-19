@@ -26,6 +26,7 @@ const DEFAULTS = {
     notifyOnSignIn: true,
     allowedIps: '',
     embedOrigins: '',
+    allowControllers: true,
   },
   stream: {
     display: 'primary',
@@ -73,6 +74,15 @@ const DEFAULTS = {
     clipboardSync: true,
     toolbar: 'top',
     sound: true,
+    controllerVibration: true,
+    touchController: false,
+    // Picture adjustments, done by the viewing browser (no cost to this PC or the stream).
+    picBrightness: 100,
+    picContrast: 100,
+    picSaturation: 100,
+    picHue: 0,
+    picWarmth: 0,
+    picSharpen: 0,
   },
   appearance: {
     appName: 'Beam Remote',
@@ -122,6 +132,7 @@ const SCHEMA = {
   'security.notifyOnSignIn': { type: 'bool', label: 'Notify me on this PC when someone signs in' },
   'security.allowedIps': { type: 'text', label: 'Only allow these IP addresses (optional)', help: 'Comma-separated, prefixes allowed, e.g. "192.168.1., 100.". Leave empty to allow any address that knows the password.', placeholder: 'any' },
 
+  'security.allowControllers': { type: 'bool', label: 'Allow game controllers', help: 'Controllers held at the viewing device (also Chromebooks, phones and tablets) work on this PC as Xbox controllers. This PC needs the controller driver once: App & network, Controllers.' },
   'security.embedOrigins': { type: 'text', max: 1000, label: 'Websites allowed to embed this page', help: 'Comma-separated, e.g. "https://mysite.com, https://dash.example.org", or * to let any website embed it (less safe: any site could frame your sign-in page). Leave empty to block embedding (safest). Embedding only works when the page is opened over https (quick link or your own domain).', placeholder: 'none' },
   'stream.display': { type: 'display', label: 'Screen to stream', help: 'You can also switch screens from the browser toolbar.' },
   'stream.resolution': { ...enumOf(RESOLUTIONS, ['Native (full)', '4K (2160p)', '1440p', '1080p', '900p', '720p', '540p', '480p', '360p']), label: 'Resolution', help: 'Biggest picture sent. Lower = less data and lower latency on slow connections. Many graphics cards only hardware-encode up to 1080p; above that the processor does the work.' },
@@ -155,6 +166,14 @@ const SCHEMA = {
   'client.clipboardSync': { type: 'bool', label: 'Share clipboard text' },
   'client.toolbar': { ...enumOf(['top', 'bottom', 'hidden'], ['Top', 'Bottom', 'Hidden (hotkey only)']), label: 'Toolbar position', help: 'Ctrl + Alt + Shift + M always opens the menu.' },
   'client.sound': { type: 'bool', label: 'Play sound' },
+  'client.controllerVibration': { type: 'bool', label: 'Controller vibration', help: "Lets games rumble the controller you're holding (Chrome and Edge, including Chromebooks)." },
+  'client.touchController': { type: 'bool', label: 'On-screen controller', help: 'Shows controller buttons and sticks on touch screens, for games when no controller is connected.' },
+  'client.picBrightness': { type: 'int', min: 50, max: 150, step: 1, label: 'Brightness (%)' },
+  'client.picContrast': { type: 'int', min: 50, max: 150, step: 1, label: 'Contrast (%)' },
+  'client.picSaturation': { type: 'int', min: 0, max: 200, step: 1, label: 'Saturation (%)' },
+  'client.picHue': { type: 'int', min: -180, max: 180, step: 1, label: 'Hue shift (degrees)' },
+  'client.picWarmth': { type: 'int', min: 0, max: 100, step: 1, label: 'Warmth (%)', help: 'A warm tint, easier on the eyes at night.' },
+  'client.picSharpen': { type: 'int', min: 0, max: 100, step: 1, label: 'Sharpness (%)', help: 'Crisper edges and text, especially at lower quality settings.' },
 
   'appearance.appName': { type: 'text', max: 40, label: 'App name', help: 'Shown on the sign-in page and this window.' },
   'appearance.welcomeText': { type: 'text', max: 120, label: 'Sign-in page message' },

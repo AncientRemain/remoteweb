@@ -29,13 +29,14 @@ if (dataArg) app.setPath('userData', path.resolve(dataArg.slice('--data-dir='.le
 const { ConfigStore, SCHEMA, DEFAULTS } = require('./config');
 const { Auth } = require('./auth');
 const { StreamServer } = require('./server');
-const { Tunnel } = require('./tunnel');
+const { Tunnel, download } = require('./tunnel');
 const input = require('./input');
 const { SystemAudio } = require('./audio');
 const cloudflare = require('./cloudflare');
 const { Updater } = require('./updater');
 const { PrivacyScreen, LABELS: COVER_LABELS } = require('./cover');
 const boost = require('./boost');
+const { Gamepads, installDriver: installPadDriver } = require('./gamepad');
 const QRCode = require('qrcode');
 
 const APP_DIR = path.join(__dirname, '..', '..');
@@ -48,7 +49,7 @@ const startHidden = process.argv.includes('--hidden') || justUpdated;
 // BEAM_DEBUG=1 writes step-by-step markers to debug.log in the data folder (always written, even if the app hangs).
 const dbg = (...a) => { if (process.env.BEAM_DEBUG) try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), `${new Date().toISOString().slice(11, 23)} ${a.join(' ')}\n`); } catch { /* ignore */ } };
 
-let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater, cover;
+let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater, cover, pads;
 let firewall = { state: 'unknown' };
 let live = null;              // stream settings in use right now (config + browser changes)
 let capInfo = {};
@@ -102,6 +103,13 @@ async function boot() {
   server = new StreamServer({
     config, auth, webDir: WEB_DIR, assetsDir: ASSETS, userDir: USER_DIR, version: VERSION, getWelcome: welcomeFor,
   });
+  // Game controllers -> virtual Xbox controllers (helper + driver; see gamepad.js).
+  pads = new Gamepads({ exe: path.join(ASSETS, 'beam-pad.exe').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), log: dbg });
+  pads.on('pad', p => server.send(p.clientId, { t: 'pad', i: p.index, player: p.player || 0, error: p.error || null }));
+  pads.on('rumble', r => server.send(r.clientId, { t: 'rumble', i: r.index, l: r.large, s: r.small }));
+  pads.on('status', () => { server.broadcast({ t: 'controllers', ...controllersInfo() }); sendToWindow('beam:status', status()); });
+  setTimeout(() => pads.recheck(), 5000); // finds out whether the driver is installed
+
   cover = new PrivacyScreen({
     appDir: APP_DIR, userDir: USER_DIR, log: dbg,
     getConfig: k => config.get(k),
@@ -384,9 +392,24 @@ ipcMain.on('cap:log', (e, line) => {
 });
 
 function handleInput(c, ev) {
-  if (!c || !server.clients.has(c.id) || !config.get('security.allowControl')) return;
+  if (!c || !server.clients.has(c.id) || !config.get('security.allowControl') || !Array.isArray(ev)) return;
+  if (ev[0] === 'g' || ev[0] === 'gc' || ev[0] === 'gd') { handlePad(c, ev); return; }
+  if (ev[0] === 'r') pads.neutral(c.id); // "let go of everything"
   if (process.env.BEAM_INPUT_DRYRUN) { console.log('[input]', JSON.stringify(ev)); return; } // testing without touching the real PC
   input.handle(ev);
+}
+
+// gc = controller connected, g = its full state, gd = disconnected.
+function handlePad(c, ev) {
+  if (!config.get('security.allowControllers')) return;
+  if (process.env.BEAM_PAD_DRYRUN) { console.log('[pad]', JSON.stringify(ev)); return; }
+  if (ev[0] === 'gc') pads.connect(c.id, ev[1], ev[2]);
+  else if (ev[0] === 'g') pads.update(c.id, ev[1], ev[2], ev.slice(3));
+  else pads.disconnect(c.id, ev[1]);
+}
+
+function controllersInfo() {
+  return { allowed: !!(config.get('security.allowControl') && config.get('security.allowControllers')), driver: pads ? pads.driver : 'unknown' };
 }
 
 // ------------------------------------------------------------------ browser connections
@@ -413,6 +436,7 @@ function welcomeFor(c) {
     schema: clientSchema(),
     secureTunnel: c.tunnel,
     cover: cover.publicState(),
+    controllers: controllersInfo(),
   };
 }
 
@@ -438,6 +462,7 @@ function wireServer() {
   const WHY = { lost: 'connection lost', kicked: 'disconnected from here or replaced', 'signed out': 'signed out', replaced: 'reopened the page', left: 'closed the page' };
   server.on('client-leave', (c, why = 'left') => {
     capSend('cap:leave', { id: c.id });
+    pads.releaseClient(c.id);
     hostStats.delete(c.id);
     input.releaseAll();
     auth.record('leave', `${c.device} disconnected after ${duration(Date.now() - c.connectedAt)} (${WHY[why] || why}).`, c.ip);
@@ -450,6 +475,7 @@ function wireServer() {
   // The page's socket dropped: keep its stream going for a moment so it can resume.
   server.on('client-detach', (c, info) => {
     dbg('detach', c.id, info && info.code);
+    pads.neutral(c.id); // its button-ups may never arrive
     if (c.transport === 'websocket') input.releaseAll(); // its key-ups may never arrive
   });
   server.on('client-resume', (c, info = {}) => {
@@ -710,6 +736,10 @@ function duration(ms) {
 // ------------------------------------------------------------------ settings changes
 function onConfigChanged(changed, fromFile) {
   if (changed.some(p => p.startsWith('server.'))) startServer();
+  if (changed.includes('security.allowControllers') || changed.includes('security.allowControl')) {
+    if (!config.get('security.allowControllers') || !config.get('security.allowControl')) for (const c of server.clients.values()) pads.releaseClient(c.id);
+    server.broadcast({ t: 'controllers', ...controllersInfo() });
+  }
   if (changed.some(p => p.startsWith('privacy.') || p === 'appearance.appName')) {
     cover.update();
     server.broadcast({ t: 'cover', ...cover.publicState() });
@@ -847,6 +877,7 @@ function status() {
     audio: sysAudio ? sysAudio.status : { state: 'off' },
     cpu: cpuNow,
     update: updater ? updater.status : { state: 'disabled' },
+    controllers: pads ? { ...pads.status(), pads: pads.status().pads.map(p => ({ ...p, device: (server.clients.get(p.clientId) || {}).device || '' })) } : { driver: 'unknown', pads: [] },
     firewall,
   };
 }
@@ -992,6 +1023,7 @@ function quit() {
 
 app.on('before-quit', () => {
   quitting = true;
+  try { pads && pads.stop(); } catch { /* ignore */ }
   try { sysAudio && sysAudio.stop(); } catch { /* ignore */ }
   try { tunnel && tunnel.stop(true); } catch { /* ignore */ }
 });
@@ -1115,5 +1147,18 @@ handle('beam:coverClearPicture', () => {
   return true;
 });
 handle('beam:coverTest', mode => cover.tryMode(mode || config.get('privacy.screen')));
+// Controller driver (ViGEmBus): download, check the signature, run its installer as admin.
+handle('beam:padDriverInstall', async () => {
+  try {
+    await installPadDriver({ download, onStep: text => sendToWindow('beam:toast', { kind: '', text }) });
+  } catch (e) {
+    pads.recheck();
+    return { ok: false, error: e.message };
+  }
+  pads.recheck();
+  for (let i = 0; i < 20 && pads.driver !== 'ready'; i++) await new Promise(r => setTimeout(r, 250));
+  return { ok: pads.driver === 'ready', driver: pads.driver };
+});
+handle('beam:padRecheck', () => { pads.recheck(); return true; });
 handle('beam:firewallFix', () => fixFirewall());
 handle('beam:quit', () => { quit(); return true; });
