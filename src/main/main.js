@@ -495,7 +495,8 @@ function wireServer() {
   });
 
   server.on('start', (c, m) => {
-    dbg('start', c.id, m.transport, c.latency);
+    dbg('start', c.id, m.transport, c.latency, m.reason || '');
+    if (m.reason === 'stuck') auth.record('network', `${c.device}'s picture stopped updating, so its stream restarted by itself.`, c.ip);
     hostStats.delete(c.id);
     setLatency(c.latency);
     if (m.transport === 'websocket') {
@@ -531,6 +532,14 @@ function wireServer() {
   server.on('signal', (c, data) => capSend('cap:signal', { id: c.id, data }));
   server.on('input', (c, ev) => handleInput(c, ev));
   server.on('keyframe', () => capSend('cap:keyframe'));
+  // A page's picture stayed frozen even after its stream restarted: capture the screen afresh.
+  let lastRecapture = 0;
+  server.on('recapture', c => {
+    if (Date.now() - lastRecapture < 10000) return;
+    lastRecapture = Date.now();
+    auth.record('network', `${c.device}'s picture stayed frozen, so the screen capture was restarted.`, c.ip);
+    capSend('cap:reacquire');
+  });
   server.on('stats', () => {});
 
   server.on('quality', (c, m) => {

@@ -29,6 +29,8 @@ const CSP_BASE = [
 const COOKIE = 'beam_sid';
 const HEADER = 14;          // binary frame header: type u8, flags u8, seq u32, capture time f64
 const GRACE_MS = 25000;     // a dropped session waits this long for its page to come back
+const KEY_GAP_MS = 250;     // keyframe requests closer together than this share one keyframe
+const KEY_RETRY_MS = 400;   // a page still waiting for a keyframe asks again after this long
 const HELLO_MS = 4000;      // time a new socket gets to say hello
 const HEARTBEAT_MS = 6000;  // ping each socket; no pong by the next beat = dead
 const TICK_MS = 5000;       // small message so pages can tell a silent socket from a dead one
@@ -365,7 +367,7 @@ class StreamServer extends EventEmitter {
         if (old && old !== ws) { try { old.terminate(); } catch { /* ignore */ } }
         this.bind(c, ws);
         if (LATENCY.includes(hello.latency)) c.latency = hello.latency;
-        if (c.transport === 'websocket') { c.seq = 0; c.acked = 0; c.needKey = true; this.requestKey(); }
+        if (c.transport === 'websocket') { c.seq = 0; c.acked = 0; c.keySeq = 0; c.keyAskedAt = 0; c.needKey = true; this.requestKey(); }
         this.send(c.id, { t: 'resumed', id: c.id, resumeKey: c.resumeKey, ...this.getWelcome(c) });
         this.emit('client-resume', c, { away, drop: hello.lastDrop });
         return c;
@@ -392,7 +394,7 @@ class StreamServer extends EventEmitter {
       resumeKey: crypto.randomBytes(16).toString('base64url'),
       connectedAt: Date.now(), ended: false, detachedAt: 0, transport: null, stats: null,
       latency: hello && LATENCY.includes(hello.latency) ? hello.latency : 'lowest',
-      seq: 0, acked: 0, needKey: true, dropped: 0, sent: 0, bytes: 0, rtt: 50, fps: 60,
+      seq: 0, acked: 0, needKey: true, keySeq: 0, keyAskedAt: 0, keys: 0, dropped: 0, sent: 0, bytes: 0, rtt: 50, fps: 60,
     };
     this.clients.set(id, c);
     this.bind(c, ws);
@@ -458,7 +460,7 @@ class StreamServer extends EventEmitter {
       case 'ack': if (Number.isInteger(m.s) && m.s > c.acked && m.s <= c.seq) c.acked = m.s; break;
       case 'start':
         if (m.transport === 'webrtc' || m.transport === 'websocket') {
-          c.transport = m.transport; c.needKey = true; c.seq = 0; c.acked = 0;
+          c.transport = m.transport; c.needKey = true; c.seq = 0; c.acked = 0; c.keySeq = 0; c.keyAskedAt = 0;
           if (LATENCY.includes(m.latency)) c.latency = m.latency;
           this.emit('start', c, m);
         }
@@ -473,6 +475,8 @@ class StreamServer extends EventEmitter {
       case 'cover': if (typeof m.mode === 'string') this.emit('cover', c, m.mode); break;
       case 'update-install': this.emit('update-install', c); break;
       case 'keyframe': this.requestKey(); break;
+      // The page's picture stayed frozen through a stream restart: capture the screen afresh.
+      case 'recapture': this.emit('recapture', c); break;
       case 'stats':
         if (m.s && typeof m.s === 'object') {
           c.stats = m.s;
@@ -491,31 +495,48 @@ class StreamServer extends EventEmitter {
   }
   broadcast(obj) { for (const id of this.clients.keys()) this.send(id, obj); }
 
+  // Asks the capture window for a keyframe. Requests close together share one keyframe, but
+  // none is lost: one that comes too soon after the last is sent as soon as the gap is up.
+  // (Before 1.7.1 such a request was dropped, and a WebSocket picture could stay frozen until
+  // the next scheduled keyframe, up to 30 s later.)
   requestKey() {
     const now = Date.now();
-    if (now - this.lastKeyRequest < 250) return;
-    this.lastKeyRequest = now;
-    this.emit('keyframe');
+    const wait = KEY_GAP_MS - (now - this.lastKeyRequest);
+    if (wait <= 0) { this.lastKeyRequest = now; this.emit('keyframe'); return; }
+    if (this.keyTimer) return;
+    this.keyTimer = setTimeout(() => { this.keyTimer = null; this.lastKeyRequest = Date.now(); this.emit('keyframe'); }, wait);
+    if (this.keyTimer.unref) this.keyTimer.unref();
   }
 
-  // WebSocket-mode media. Frames that would queue up behind a slow connection are skipped
-  // (and a fresh keyframe asked for), so the picture stays live instead of lagging behind.
-  // Lowest-latency mode allows the least queueing; Smoothest the most.
+  // WebSocket-mode media. When more frames are on their way to a page than its connection is
+  // carrying, sending stops (the picture would only fall further behind) until the backlog has
+  // drained; the picture then starts again from a fresh keyframe, as the frames in between are
+  // gone. Lowest-latency mode allows the least queueing, Smoothest the most.
   media(kind, key, ts, data, fps) {
     for (const c of this.clients.values()) {
       if (c.transport !== 'websocket' || !c.ws || c.ws.readyState !== 1) continue;
       c.fps = fps || c.fps;
       const inflight = c.seq - c.acked;
-      const slack = c.latency === 'lowest' ? 0.05 : c.latency === 'smooth' ? 0.35 : 0.12;
+      const slack = c.latency === 'lowest' ? 0.08 : c.latency === 'smooth' ? 0.35 : 0.15;
       const limit = Math.max(3, Math.round(c.fps * (Math.min(c.rtt, 1000) / 1000 + slack)));
       if (kind === 'video') {
-        if (!key && (c.needKey || inflight > limit)) {
-          if (!c.needKey) { c.needKey = true; this.requestKey(); }
-          c.dropped++;
-          continue;
+        // A keyframe is big, and the frames sent right behind it wait for it: that's not a
+        // connection falling behind, so it gets half a second of extra room.
+        const room = c.keySeq > c.acked ? limit + Math.round(c.fps / 2) : limit;
+        if (!c.needKey && inflight > room) c.needKey = true;
+        if (c.needKey) {
+          if (!key || inflight > limit) {
+            c.dropped++;
+            // Ask once the backlog has cleared (a keyframe sent into a full line only queues
+            // behind it), and keep asking until one gets through.
+            if (inflight <= Math.max(1, limit >> 1) && Date.now() - (c.keyAskedAt || 0) > KEY_RETRY_MS) {
+              c.keyAskedAt = Date.now();
+              this.requestKey();
+            }
+            continue;
+          }
+          c.needKey = false;
         }
-        if (key && inflight > limit * 2) { c.dropped++; c.needKey = true; this.requestKey(); continue; }
-        if (key) c.needKey = false;
       } else if (inflight > limit * 3) continue;
       const buf = Buffer.allocUnsafe(HEADER + data.byteLength);
       buf[0] = kind === 'video' ? 1 : 2;
@@ -525,7 +546,7 @@ class StreamServer extends EventEmitter {
       buf.writeDoubleLE(ts, 6);
       Buffer.from(data.buffer || data, data.byteOffset || 0, data.byteLength).copy(buf, HEADER);
       c.ws.send(buf, { binary: true });
-      if (kind === 'video') { c.sent++; c.bytes += buf.length; }
+      if (kind === 'video') { c.sent++; c.bytes += buf.length; if (key) { c.keySeq = seq; c.keys = (c.keys || 0) + 1; } }
     }
   }
 

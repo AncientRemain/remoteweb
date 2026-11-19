@@ -237,3 +237,56 @@ test('socket: signing out ends that browser\'s streams', async () => {
     assert.strictEqual(s.server.clients.size, 0);
   } finally { await s.done(); }
 });
+
+test('keyframe requests close together share one, but none is lost', async () => {
+  const s = await setup();
+  try {
+    let n = 0;
+    s.server.on('keyframe', () => n++);
+    s.server.requestKey(); s.server.requestKey(); s.server.requestKey();
+    assert.strictEqual(n, 1);
+    await wait(320);
+    assert.strictEqual(n, 2, 'the request that came too soon is sent once the gap is up');
+    await wait(300);
+    assert.strictEqual(n, 2);
+  } finally { await s.done(); }
+});
+
+test('websocket media: stops behind a slow connection, then asks for a keyframe until one gets through', async () => {
+  const s = await setup();
+  const sent = [];
+  const c = {
+    id: 'fake', transport: 'websocket', latency: 'lowest', rtt: 50, fps: 60,
+    seq: 0, acked: 0, needKey: true, keySeq: 0, keyAskedAt: 0, dropped: 0, sent: 0, bytes: 0,
+    ws: { readyState: 1, send: b => { if (Buffer.isBuffer(b)) sent.push({ key: b[1] === 1, seq: b.readUInt32LE(2) }); } },
+  };
+  try {
+    const keys = [];
+    s.server.on('keyframe', () => keys.push(Date.now()));
+    s.server.clients.set(c.id, c);
+    const frame = Buffer.alloc(10);
+    const media = key => s.server.media('video', key, Date.now(), frame, 60);
+    media(false); // nothing to build on yet: skipped, and a keyframe asked for
+    assert.strictEqual(sent.length, 0);
+    assert.strictEqual(keys.length, 1);
+    media(true);
+    assert.deepStrictEqual(sent.map(f => f.key), [true]);
+    for (let i = 0; i < 60; i++) media(false); // never acknowledged: sending stops
+    const through = sent.length;
+    assert.ok(through > 9 && through < 60, `room behind a keyframe, but not unlimited (sent ${through})`);
+    assert.strictEqual(c.needKey, true);
+    assert.strictEqual(keys.length, 1, 'no keyframe asked for while the line is still full');
+    media(true); // a keyframe sent into a full line would only queue: held back too
+    assert.strictEqual(sent.length, through);
+    c.acked = c.seq; // the backlog clears
+    await wait(450);
+    media(false); // still skipped, and now a keyframe is asked for again
+    assert.strictEqual(sent.length, through);
+    assert.strictEqual(keys.length, 2);
+    media(true);
+    assert.strictEqual(sent.length, through + 1);
+    assert.strictEqual(c.needKey, false);
+    media(false);
+    assert.strictEqual(sent.length, through + 2, 'the picture carries on after the keyframe');
+  } finally { s.server.clients.delete(c.id); await s.done(); }
+});

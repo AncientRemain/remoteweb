@@ -93,7 +93,10 @@
     gotFrame: false, announced: false, rvfcToken: 0,
     decoder: null, wsConfig: null, needKey: true, ctx: null, frameMeta: new Map(), audioDecoder: null, actx: null, gain: null, nextAudio: 0,
     wsFrames: 0, wsBytes: 0, decodeSum: 0, decodeN: 0, latSum: 0, latN: 0, clientDropped: 0,
-    rtcLatSum: 0, rtcLatN: 0, prevRtc: null, hostStats: null,
+    rtcLatSum: 0, rtcLatN: 0, prevRtc: null, hostStats: null, hostStatsAt: 0,
+    // Frozen-picture recovery (see the watchdog below).
+    keyAskedAt: 0, lastDecodedAt: 0, rtcProgressAt: 0, watchFrom: 0, frozenStep: 0, recoveries: [], decErrors: [],
+    startTimer: null, startReason: null,
     ping: { id: 0, rtt: null, samples: [], offset: 0, synced: false },
     stats: {}, history: { ping: [], lat: [], fps: [] },
     pressed: new Set(), buttons: new Set(), rel: { x: 0, y: 0 }, wheel: { y: 0, x: 0, pending: false },
@@ -289,11 +292,15 @@
   function hideNetNote() { $('#netnote').hidden = true; }
 
   // No message at all for 12 s (the PC sends one at least every 5 s) means the socket is dead
-  // even if the browser hasn't noticed yet: drop it and reconnect.
+  // even if the browser hasn't noticed yet: drop it and reconnect. On a page in view the
+  // once-a-second pings come back over this socket (unless WebRTC's channel carries them),
+  // so there 7 s of silence is already enough.
   setInterval(() => {
     const ws = S.ws;
-    if (ws && ws.readyState === 1 && performance.now() - S.lastMsgAt > 12000) socketLost(ws, { code: 4008, reason: 'silent' }, true);
-  }, 2000);
+    const viaWs = !(S.transport === 'webrtc' && S.ctl && S.ctl.readyState === 'open');
+    const limit = viaWs && !document.hidden ? 7000 : 12000;
+    if (ws && ws.readyState === 1 && performance.now() - S.lastMsgAt > limit) socketLost(ws, { code: 4008, reason: 'silent' }, true);
+  }, 1000);
   // Phones freeze background pages; when the page is back (or the network is), check at once.
   function wake() {
     if (document.hidden || $('#stream').hidden || S.intentional || S.kicked) return;
@@ -348,7 +355,8 @@
         S.reconnectTries = 0; S.updating = false;
         hideNetNote();
         applyWelcome(m, true);
-        if (S.transport === 'websocket' && S.gotFrame) { S.needKey = true; S.frameMeta.clear(); send({ t: 'keyframe' }); } // frame numbers restart
+        S.watchFrom = performance.now();
+        if (S.transport === 'websocket' && S.gotFrame) { S.needKey = true; S.frameMeta.clear(); askKey(true); } // frame numbers restart
         else if (!(S.transport === 'webrtc' && S.pc && ['new', 'connecting', 'connected'].includes(S.pc.connectionState))) startTransport();
         break;
       case 'auth-failed':
@@ -373,7 +381,7 @@
       case 'pong': onPong(m); break;
       case 'wsconfig': onWsConfig(m); break;
       case 'audioconfig': onAudioConfig(m); break;
-      case 'hoststats': S.hostStats = m.s; break;
+      case 'hoststats': S.hostStats = m.s; S.hostStatsAt = performance.now(); break;
       case 'pad': onPadReply(m); break;
       case 'rumble': onRumble(m); break;
       case 'update': onUpdateInfo(m); break;
@@ -406,6 +414,7 @@
   }
 
   function onStreamError(m) {
+    clearTimeout(S.startTimer); // explained below; no point restarting by itself
     if (m.code === 'no-screen') {
       // The PC's display is asleep or off and could not be woken. Try again a few times.
       clearTimeout(S.retryTimer);
@@ -479,14 +488,18 @@
     if (t === 'auto' && canWs() && remotePage() && rtcFailedRecently()) return startWsMode();
     startWebRTC(t === 'auto' && canWs());
   }
-  function restartTransport() {
+  // reason: 'stuck' when the frozen-picture watchdog restarts it (the PC logs that).
+  function restartTransport(reason) {
     teardownMedia();
+    S.startReason = typeof reason === 'string' ? reason : null;
     if (S.ws && S.ws.readyState === 1) startTransport();
     else if (!S.intentional && !S.kicked) showOffline();
   }
+  // Sent once with the next 'start' message.
+  function takeStartReason() { const r = S.startReason; S.startReason = null; return r || undefined; }
 
   function teardownMedia() {
-    clearTimeout(S.fallbackTimer); clearTimeout(S.discTimer); clearTimeout(S.retryTimer); clearTimeout(S.probeTimer);
+    clearTimeout(S.fallbackTimer); clearTimeout(S.discTimer); clearTimeout(S.retryTimer); clearTimeout(S.probeTimer); clearTimeout(S.startTimer);
     if (S.pc) { try { S.pc.close(); } catch { /* ignore */ } }
     S.pc = null; S.ctl = null; S.mv = null; S.rvfcToken++;
     const v = $('#video');
@@ -503,6 +516,8 @@
     if (S.gotFrame) return;
     S.gotFrame = true;
     S.firstFrameAt = performance.now();
+    S.watchFrom = S.firstFrameAt; S.frozenStep = 0;
+    clearTimeout(S.startTimer);
     S.captureRetries = 0;
     if (S.transport === 'webrtc') rememberRtc(false); // direct works on this network
     updateTouchPad();
@@ -532,7 +547,7 @@
     S.transport = 'webrtc'; S.remoteSet = false; S.pendingCandidates = [];
     showMedia('video');
     overlay('Connecting…', 'Opening a direct connection to your PC');
-    send({ t: 'start', transport: 'webrtc', latency: latencyMode() });
+    send({ t: 'start', transport: 'webrtc', latency: latencyMode(), reason: takeStartReason() });
     const pc = new RTCPeerConnection({ iceServers: (S.welcome && S.welcome.ice) || [], bundlePolicy: 'max-bundle' });
     S.pc = pc;
     const vt = pc.addTransceiver('video', { direction: 'recvonly' });
@@ -679,12 +694,37 @@
     const codecs = await decodableCodecs();
     if (!codecs.length) { overlay('This browser cannot decode video', 'Try Chrome or Edge, or switch the connection type to WebRTC.', false); return; }
     ensureAudio();
-    send({ t: 'start', transport: 'websocket', codecs, latency: latencyMode() });
+    send({ t: 'start', transport: 'websocket', codecs, latency: latencyMode(), reason: takeStartReason() });
+    armStartTimer(10000);
+  }
+
+  // No picture at all this long after asking for the stream: restart it by itself.
+  function armStartTimer(ms) {
+    clearTimeout(S.startTimer);
+    S.startTimer = setTimeout(() => {
+      if (S.gotFrame || S.transport !== 'websocket' || !S.ws || S.ws.readyState !== 1) return;
+      if (document.hidden) { armStartTimer(5000); return; } // look again once the page is in view
+      recoverStream();
+    }, ms);
+  }
+
+  // Asks the PC for a keyframe (a fresh start for the decoder). While one is awaited the
+  // request goes out again twice a second, so one lost on the way can't freeze the picture.
+  function askKey(force) {
+    const t = performance.now();
+    if (!force && t - S.keyAskedAt < 500) return;
+    S.keyAskedAt = t;
+    send({ t: 'keyframe' });
   }
 
   function onWsConfig(m) {
+    const prev = S.wsConfig;
     S.wsConfig = m;
-    if (S.transport === 'websocket') setupDecoder();
+    if (S.transport !== 'websocket') return;
+    // Same codec and size (e.g. only the bitrate changed): the PC's encoder carries on with
+    // its stream, so keep decoding instead of waiting for a keyframe.
+    if (prev && S.decoder && S.decoder.state === 'configured' && prev.codecString === m.codecString && prev.width === m.width && prev.height === m.height) return;
+    setupDecoder();
   }
 
   function setupDecoder() {
@@ -697,14 +737,30 @@
         console.warn('decoder', e);
         if (S.decoder !== dec) return;
         S.decoder = null; S.needKey = true;
-        send({ t: 'keyframe' });
+        // A codec this device keeps failing to play: leave it out and restart with another.
+        const t = performance.now(), codec = S.wsConfig && S.wsConfig.codec;
+        S.decErrors = S.decErrors.filter(x => t - x < 30000);
+        S.decErrors.push(t);
+        if (S.decErrors.length >= 3 && codec && codec !== 'H264' && decodable && decodable.includes('H264')) {
+          decodable = decodable.filter(c => c !== codec);
+          S.decErrors = [];
+          toast(`This device had trouble playing ${codec === 'H265' ? 'H.265' : codec} video, so the stream switched to H.264.`);
+          restartTransport();
+          return;
+        }
+        askKey(true);
       },
     });
     dec.configure({ codec: S.wsConfig.codecString, optimizeForLatency: true });
     S.decoder = dec;
     S.needKey = true;
-    send({ t: 'keyframe' });
+    askKey(true);
   }
+
+  // Frames waiting to be decoded before the page skips ahead to a fresh keyframe. A burst of
+  // frames held up by the network decodes in a few milliseconds, so skipping early only
+  // costs a big keyframe and a visible hitch.
+  const DECODE_BACKLOG = { lowest: 8, balanced: 12, smooth: 24 };
 
   function onBinary(buf) {
     if (buf.byteLength < 14) return;
@@ -716,14 +772,14 @@
       S.wsBytes += buf.byteLength;
       if (S.transport !== 'websocket') return;
       if (!S.decoder || S.decoder.state === 'closed') { if (S.wsConfig) setupDecoder(); else return; }
-      if (S.needKey && !key) return;
-      if (!key && S.decoder.decodeQueueSize > 3) { S.needKey = true; S.clientDropped++; send({ t: 'keyframe' }); return; }
+      if (S.needKey && !key) { askKey(); return; }
+      if (!key && S.decoder.decodeQueueSize > DECODE_BACKLOG[latencyMode()]) { S.needKey = true; S.clientDropped++; askKey(true); return; }
       if (key) S.keyFrames = (S.keyFrames || 0) + 1; // shown in the debug state only
       S.frameMeta.set(seq, { host: ts, recv: performance.now() });
       try {
         S.decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: seq, data: payload }));
         if (key) S.needKey = false;
-      } catch (e) { console.warn('decode', e); S.needKey = true; send({ t: 'keyframe' }); }
+      } catch (e) { console.warn('decode', e); S.needKey = true; askKey(true); }
     } else if (type === 2) {
       const d = S.audioDecoder;
       if (d && d.state === 'configured' && cfg('sound') !== false && S.actx && S.actx.state === 'running') {
@@ -744,6 +800,7 @@
     S.ctx.drawImage(frame, 0, 0);
     frame.close();
     S.wsFrames++;
+    S.lastDecodedAt = performance.now();
     if (meta) {
       S.decodeSum += performance.now() - meta.recv; S.decodeN++;
       if (S.ping.synced) {
@@ -850,6 +907,7 @@
           drop: inV.framesDropped || 0,
         };
         S.prevRtc = cur;
+        if (!p || cur.fd > p.fd) S.rtcProgressAt = t; // for the frozen-picture watchdog
         if (p) {
           const dt = (t - p.t) / 1000;
           st.kbps = ((cur.bytes - p.bytes) * 8) / dt / 1000;
@@ -913,6 +971,50 @@
 
   setInterval(sendPing, 1000);
   setInterval(sampleStats, 1000);
+
+  // ------------------------------------------------------------ frozen-picture watchdog
+  // The PC's own numbers say it is making frames, yet the picture hasn't changed for a few
+  // seconds: recover by itself. First a new decoder and a fresh keyframe; then a full restart
+  // of the stream (what switching modes does); if that keeps happening, a fresh capture of the
+  // PC's screen as well. A still screen makes no new frames, so it never counts as frozen.
+  const FROZEN = { key: 2500, restart: 6000 };
+  function hostSending() {
+    const h = S.hostStats;
+    if (!h || performance.now() - S.hostStatsAt > 3000) return false;
+    return S.transport === 'webrtc' ? (h.fps || 0) >= 2 : (h.fps || 0) >= 1 || (h.capFps || 0) >= 1;
+  }
+  setInterval(() => {
+    const t = performance.now();
+    const watching = S.gotFrame && S.ws && S.ws.readyState === 1 && !document.hidden && $('#overlay').classList.contains('gone')
+      && (S.transport === 'websocket' || (S.transport === 'webrtc' && S.pc && S.pc.connectionState === 'connected'));
+    const last = Math.max(S.watchFrom, S.transport === 'websocket' ? S.lastDecodedAt : S.rtcProgressAt);
+    if (!watching || !hostSending() || t - last < FROZEN.key) { S.frozenStep = 0; return; }
+    if (S.frozenStep === 0) {
+      S.frozenStep = 1;
+      if (S.transport === 'websocket') setupDecoder(); // a new decoder, which asks for a keyframe
+      return;
+    }
+    if (t - last >= FROZEN.restart) recoverStream('The picture froze, so the stream is restarting.');
+  }, 500);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) S.watchFrom = performance.now(); });
+
+  function recoverStream(note) {
+    const t = performance.now();
+    S.recoveries = S.recoveries.filter(x => t - x < 120000);
+    const lastAt = S.recoveries.length ? S.recoveries[S.recoveries.length - 1] : -Infinity;
+    if (S.recoveries.length >= 4 && t - lastAt < 20000) {
+      // It keeps happening: keep trying, but only every 20 s.
+      S.watchFrom = t;
+      if (!S.gotFrame) armStartTimer(20000 - (t - lastAt));
+      return;
+    }
+    const recapture = S.recoveries.length > 0; // the last restart didn't hold: capture afresh too
+    S.recoveries.push(t);
+    S.frozenStep = 0; S.watchFrom = t;
+    if (note) toast(note);
+    if (recapture) send({ t: 'recapture' });
+    restartTransport('stuck');
+  }
 
   // ------------------------------------------------------------ stats overlay
   const grade = (v, good, ok) => (v == null ? '' : v <= good ? 'good' : v <= ok ? 'warn' : 'bad');

@@ -437,8 +437,14 @@ const CODEC_STRINGS = {
 const wsv = {
   encoder: null, key: null, width: 0, height: 0, codec: null, codecString: null, configuring: null, capHeight: 0,
   needKey: true, lastKeyAt: 0, lastFrameAt: 0, readers: [], scale: 1, inTimes: new Map(),
-  frames: 0, bytes: 0, encodeSum: 0, encodeN: 0, dropped: 0,
+  frames: 0, bytes: 0, encodeSum: 0, encodeN: 0, dropped: 0, arrived: 0, stallSince: 0,
 };
+
+// Throws the encoder away; the next frame sets up a new one (and starts with a keyframe).
+function resetEncoder() {
+  try { if (wsv.encoder && wsv.encoder.state !== 'closed') wsv.encoder.close(); } catch { /* ignore */ }
+  wsv.encoder = null; wsv.key = null; wsv.needKey = true; wsv.stallSince = 0;
+}
 const wsa = { encoder: null, config: null, sent: null };
 
 function encoderConfig(codecString, w, h, hw) {
@@ -489,13 +495,19 @@ async function configureEncoder(w, h) {
     reapplySize();
     return false; // set up again when the smaller frames arrive
   }
+  const key = `${pick.config.codec}|${w}x${h}|${pick.config.bitrate}|${settings.fps}|${settings.contentHint}|${pick.config.hardwareAcceleration}`;
+  // Only the bitrate changed (the stream adapting to the connection): the encoder carries on
+  // with its stream, so no keyframe, which would be a big frame on a connection that is
+  // already struggling.
+  const noBitrate = k => (k || '').split('|').filter((_, i) => i !== 2).join('|');
+  const sameStream = !!wsv.encoder && wsv.encoder.state === 'configured' && noBitrate(wsv.key) === noBitrate(key);
   if (!wsv.encoder || wsv.encoder.state === 'closed') {
     wsv.encoder = new VideoEncoder({ output: onEncoded, error: e => { log('encoder error', e.message); wsv.encoder = null; wsv.key = null; wsv.needKey = true; } });
   }
   wsv.encoder.configure(pick.config);
   wsv.width = w; wsv.height = h; wsv.codec = pick.codec; wsv.codecString = pick.config.codec;
-  wsv.key = `${pick.config.codec}|${w}x${h}|${pick.config.bitrate}|${settings.fps}|${settings.contentHint}|${pick.config.hardwareAcceleration}`;
-  wsv.needKey = true;
+  wsv.key = key;
+  if (!sameStream) wsv.needKey = true;
   host.send('cap:wsconfig', { codec: pick.codec, codecString: pick.config.codec, width: w, height: h, hw: pick.config.hardwareAcceleration });
   log(`WebSocket encoder: ${pick.config.codec} ${w}x${h} ${Math.round(pick.config.bitrate / 1000)} kbps (${pick.config.hardwareAcceleration})`);
   return true;
@@ -517,6 +529,7 @@ async function onFrame(frame) {
   const capture = now();
   try {
     if (!wsClients.size) return;
+    wsv.arrived++;
     if (capture - wsv.lastFrameAt < (1000 / settings.fps) * 0.7) return; // keep to the chosen fps
     const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
     if (w < 16 || h < 16) return;
@@ -529,7 +542,15 @@ async function onFrame(frame) {
       await wsv.configuring;
       if (!wsv.encoder || wsv.encoder.state !== 'configured' || !wsv.key || !wsv.key.includes(wantKey)) return;
     }
-    if (wsv.encoder.encodeQueueSize > 2) { wsv.dropped++; return; }
+    if (wsv.encoder.encodeQueueSize > 2) {
+      wsv.dropped++;
+      // An encoder that stops giving frames back would freeze the picture for good: after
+      // two seconds of that, start a new one.
+      if (!wsv.stallSince) wsv.stallSince = capture;
+      else if (capture - wsv.stallSince > 2000) { log('the video encoder stopped responding; starting a new one'); resetEncoder(); }
+      return;
+    }
+    wsv.stallSince = 0;
     const keyFrame = wsv.needKey || capture - wsv.lastKeyAt > settings.keyframeSeconds * 1000;
     const input = (w !== frame.displayWidth || h !== frame.displayHeight)
       ? new VideoFrame(frame, { visibleRect: { x: 0, y: 0, width: w, height: h } })
@@ -561,6 +582,17 @@ function startWsReaders(stream) {
         if (r.done) break;
         await onFrame(r.value);
       }
+      // Stopped by itself rather than by stopWsReaders: no frames would reach the encoder
+      // again, so start reading afresh (from a new capture if this one has ended).
+      if (!wsv.readers.includes(reader)) return;
+      wsv.readers = wsv.readers.filter(x => x !== reader);
+      if (!wsClients.size) return;
+      log('the frame reader stopped; starting it again');
+      setTimeout(() => {
+        if (!wsClients.size || wsv.readers.length) return;
+        if (media && media.getVideoTracks()[0]?.readyState === 'live') startWsReaders(media);
+        else reacquire();
+      }, 300);
     })();
   } else {
     // Older engines: pull frames from a <video> element instead.
@@ -662,12 +694,12 @@ setInterval(async () => {
   if (wsClients.size) {
     const s = {
       ...a,
-      transport: 'websocket', fps: wsv.frames, w: wsv.width, h: wsv.height, kbps: (wsv.bytes * 8) / 1000,
+      transport: 'websocket', fps: wsv.frames, capFps: wsv.arrived, w: wsv.width, h: wsv.height, kbps: (wsv.bytes * 8) / 1000,
       encodeMs: wsv.encodeN ? wsv.encodeSum / wsv.encodeN : 0, encoder: `${wsv.codecString || ''} ${wsv.encoder ? '' : '(starting)'}`.trim(),
       hw: settings.hardwareEncoding === 'prefer-hardware', limit: wsv.scale < 0.99 ? 'bandwidth' : 'none', codec: wsv.codec || '',
       route: 'Through the web connection', rtt: null, scale: wsv.scale,
     };
-    wsv.frames = 0; wsv.bytes = 0; wsv.encodeSum = 0; wsv.encodeN = 0;
+    wsv.frames = 0; wsv.bytes = 0; wsv.encodeSum = 0; wsv.encodeN = 0; wsv.arrived = 0;
     for (const id of wsClients.keys()) host.send('cap:stats', { id, stats: s });
   }
 }, 1000);

@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.7.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.7.1.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -131,6 +131,8 @@ Chromium's screen capture tops out at about 50–60 frames per second on most PC
 **Connections that hold up**
 - If the page's connection drops (Wi-Fi hiccup, phone switching networks, tunnel blip), it reconnects within a second and picks up the same session. A WebRTC picture keeps playing meanwhile; a WebSocket stream continues at the next keyframe.
 - Dead connections are noticed in seconds (heartbeats both ways), not minutes.
+- **A frozen picture fixes itself.** If the PC is sending but the picture stops changing, the page first asks for a fresh keyframe with a new decoder (about 2.5 s), then restarts the stream by itself as switching modes would (about 6 s), and if it keeps happening, the PC captures its screen afresh too. Each restart is noted in the activity log. A still screen never counts as frozen.
+- In WebSocket mode, a slow connection never leaves the picture waiting: the PC pauses until the backlog has cleared, then sends a fresh keyframe, and keeps asking until one gets through. Bitrate changes (the stream adapting to the connection) no longer cost a keyframe.
 - If the PC's screen has gone to sleep, the app wakes it before streaming, and says so clearly if the monitor is switched off.
 - Phones on the same Wi-Fi connect directly: the PC offers its real network address to WebRTC.
 - **App & updates → Diagnostics** checks that Windows Firewall lets devices on your network in, with a one-click fix.
