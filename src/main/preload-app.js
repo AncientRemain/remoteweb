@@ -1,0 +1,43 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+const call = ch => (...args) => ipcRenderer.invoke(`beam:${ch}`, ...args);
+const listen = ch => fn => ipcRenderer.on(`beam:${ch}`, (_e, data) => fn(data));
+
+contextBridge.exposeInMainWorld('beam', {
+  getState: call('getState'),
+  updateConfig: call('updateConfig'),
+  resetConfig: call('resetConfig'),
+  setPassword: call('setPassword'),
+  totpStart: call('totpStart'),
+  totpConfirm: call('totpConfirm'),
+  totpDisable: call('totpDisable'),
+  signOutAll: call('signOutAll'),
+  kick: call('kick'),
+  tunnelStart: call('tunnelStart'),
+  tunnelStop: call('tunnelStop'),
+  tunnelLog: call('tunnelLog'),
+  domainSetup: call('domainSetup'),
+  domainToken: call('domainToken'),
+  domainForget: call('domainForget'),
+  onDomain: listen('domain'),
+  qr: call('qr'),
+  openExternal: call('openExternal'),
+  copy: call('copy'),
+  capLog: call('capLog'),
+  openPath: call('openPath'),
+  exportConfig: call('exportConfig'),
+  importConfig: call('importConfig'),
+  restartAdmin: call('restartAdmin'),
+  testInBrowser: call('testInBrowser'),
+  embedTest: call('embedTest'),
+  updateCheck: call('updateCheck'),
+  updateDownload: call('updateDownload'),
+  updateInstall: call('updateInstall'),
+  firewallCheck: call('firewallCheck'),
+  firewallFix: call('firewallFix'),
+  quit: call('quit'),
+  onStatus: listen('status'),
+  onState: listen('state'),
+  onLog: listen('log'),
+  onToast: listen('toast'),
+});

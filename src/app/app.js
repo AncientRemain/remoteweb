@@ -1,0 +1,984 @@
+// Beam Remote dashboard: status, links, live stats, every setting, and the setup guide.
+'use strict';
+(() => {
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (v, d = 0) => (v == null || !Number.isFinite(v) ? '–' : Number(v).toFixed(d));
+  const mbps = k => (k == null ? '–' : (k / 1000).toFixed(k >= 10000 ? 0 : 1));
+  const get = (o, p) => p.split('.').reduce((x, k) => (x == null ? undefined : x[k]), o);
+
+  const ICONS = {
+    home: '<path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    gauge: '<path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
+    laptop: '<rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/>',
+    palette: '<circle cx="12" cy="12" r="9"/><circle cx="8" cy="10" r="1"/><circle cx="12" cy="7.5" r="1"/><circle cx="16" cy="10" r="1"/><path d="M12 21a3 3 0 0 1 0-6h2a3 3 0 0 0 3-3"/>',
+    cog: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+    book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+    qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/>',
+    external: '<path d="M14 4h6v6M10 14L20 4M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>',
+    play: '<path d="M7 5l12 7-12 7z"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+    phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+    monitor: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+    info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+    alert: '<path d="M12 3l9.5 16.5h-19z"/><path d="M12 10v4M12 17h.01"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/>',
+  };
+  const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+
+  // small markup helpers
+  const section = (title, desc, body, actions = '') => `<section class="section"><div class="section-head"><div><h2>${title}</h2>${desc ? `<p>${desc}</p>` : ''}</div>${actions ? `<div class="row">${actions}</div>` : ''}</div>${body}</section>`;
+  const note = (kind, html) => `<div class="note ${kind}">${icon(kind === 'ok' ? 'check' : kind === 'warn' || kind === 'bad' ? 'alert' : 'info')}<div class="body">${html}</div></div>`;
+
+  let ST = null;      // settings, auth, displays...
+  let STATUS = null;  // server, tunnel, clients (pushed every second)
+  let page = 'home';
+  const hist = new Map(); // client id -> { ping: [], lat: [], last }
+  let remoteGuide = localStorage.getItem('remoteGuide') || 'tailscale';
+
+  const PAGES = [
+    ['home', 'Home', 'home'], ['remote', 'Remote access', 'globe'], ['quality', 'Stream quality', 'gauge'],
+    ['security', 'Security', 'shield'], ['browser', 'Browser controls', 'laptop'], ['appearance', 'Appearance', 'palette'],
+    ['app', 'App & network', 'cog'], ['guide', 'Setup guide', 'book'],
+  ];
+
+  function toast(text, kind = '') {
+    const t = document.createElement('div');
+    t.className = `toast ${kind}`;
+    t.textContent = text;
+    $('#toasts').appendChild(t);
+    setTimeout(() => t.remove(), kind === 'error' ? 6000 : 2600);
+  }
+
+  // ------------------------------------------------------------ look
+  function applyTheme() {
+    const a = ST.config.appearance;
+    const st = document.documentElement.style;
+    st.setProperty('--accent', a.accent);
+    st.setProperty('--accent-2', a.accent2);
+    st.setProperty('--radius', `${a.radius}px`);
+    st.setProperty('--font', a.font);
+    const theme = a.theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : a.theme;
+    document.documentElement.dataset.theme = theme;
+    $('#tb-name').textContent = a.appName;
+    document.title = a.appName;
+    let style = document.getElementById('custom-style');
+    if (!style) { style = document.createElement('style'); style.id = 'custom-style'; document.head.appendChild(style); }
+    style.textContent = ST.customCss || '';
+  }
+
+  // ------------------------------------------------------------ start
+  async function init() {
+    ST = await beam.getState();
+    STATUS = ST.status;
+    applyTheme();
+    renderNav();
+    render();
+    beam.onStatus(s => { STATUS = s; onStatus(); });
+    beam.onState(s => {
+      ST = { ...ST, ...s };
+      applyTheme();
+      renderNav();
+      if (!editing()) render();
+    });
+    beam.onLog(e => {
+      ST.log = [e, ...(ST.log || [])].slice(0, 100);
+      if (page === 'security') { const box = $('#seclog'); if (box) box.innerHTML = logHtml(); }
+    });
+    beam.onToast(t => toast(t.text, t.kind));
+    if (!ST.auth.passwordSet) openWizard();
+  }
+
+  function editing() {
+    const a = document.activeElement;
+    if (!a || !$('#main').contains(a)) return false;
+    return a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /text|password|number|search/.test(a.type));
+  }
+
+  function navHtml() {
+    const n = STATUS ? STATUS.clients.length : 0;
+    const left = setupLeft();
+    const t = STATUS ? STATUS.tunnel : { state: 'stopped' };
+    const tunnelLine = ST.config.network.tunnel === 'none' ? 'Remote access: none'
+      : t.state === 'online' ? 'Remote access on' : t.state === 'error' ? 'Remote access problem' : t.state === 'stopped' ? 'Remote access off' : 'Remote access starting';
+    const tdot = t.state === 'online' ? 'good' : t.state === 'error' ? 'bad' : t.state === 'stopped' ? '' : 'warn';
+    return PAGES.map(([id, label, ic]) => `<button class="nav-item ${id === page ? 'active' : ''}" data-page="${id}">${icon(ic)}<span>${label}</span>${id === 'home' && n ? `<span class="count live">${n}</span>` : ''}${id === 'guide' && left ? `<span class="count">${left}</span>` : ''}</button>`).join('')
+      + `<div class="spacer"></div><div class="side-foot">
+        <div class="line"><span class="dot ${STATUS && STATUS.server.http ? 'good' : 'bad'}"></span>${STATUS && STATUS.server.http ? `Serving on port ${STATUS.server.http}` : 'Web server stopped'}</div>
+        <div class="line"><span class="dot ${tdot}"></span>${tunnelLine}</div>
+        <div style="margin-top:6px">Version ${esc(ST.version)} · <button data-quit="1">Quit</button></div></div>`;
+  }
+  function renderNav() {
+    const html = navHtml();
+    const nav = $('#nav');
+    if (nav.dataset.sig !== html) { nav.innerHTML = html; nav.dataset.sig = html; }
+  }
+
+  $('#nav').addEventListener('click', e => {
+    if (e.target.closest('[data-quit]')) { if (confirm('Quit Beam Remote? Nobody will be able to connect until you open it again.')) beam.quit(); return; }
+    const b = e.target.closest('[data-page]');
+    if (!b) return;
+    page = b.dataset.page;
+    renderNav();
+    render();
+    $('#main').scrollTop = 0;
+  });
+
+  function render() {
+    const fn = { home: pageHome, remote: pageRemote, quality: pageQuality, security: pageSecurity, browser: pageBrowser, appearance: pageAppearance, app: pageApp, guide: pageGuide }[page];
+    $('#main').innerHTML = `<div class="page">${fn()}</div>`;
+    afterRender();
+  }
+
+  function afterRender() {
+    if (page === 'home') drawSparks();
+    if (page === 'appearance') updatePreview();
+  }
+
+  function onStatus() {
+    const n = STATUS.clients.length;
+    $('#tb-status').innerHTML = n ? `<span class="dot live"></span>Streaming to ${n} device${n > 1 ? 's' : ''}` : '';
+    for (const c of STATUS.clients) {
+      const h = hist.get(c.id) || { ping: [], lat: [], last: '' };
+      const key = JSON.stringify(c.stats || {});
+      if (c.stats && key !== h.last) {
+        h.last = key;
+        h.ping.push(c.stats.ping ?? null); h.lat.push(c.stats.latency ?? null);
+        if (h.ping.length > 60) { h.ping.shift(); h.lat.shift(); }
+      }
+      hist.set(c.id, h);
+    }
+    renderNav();
+    // Parts that change with the live status; only redrawn when their content changed.
+    const swap = (sel, html) => { const el = $(sel); if (el && el.dataset.sig !== html) { el.innerHTML = html; el.dataset.sig = html; } };
+    if (page === 'home') swap('#alerts', alertsHtml());
+    if (page === 'app') { swap('#update-box', updateHtml()); swap('#fw-value', firewallHtml()); }
+    if (page === 'security') swap('#embed-box', embedHtml());
+    if (page === 'home') {
+      const live = $('#live'); if (live) live.innerHTML = liveHtml();
+      const st = $('#status'); if (st) st.innerHTML = statusHtml();
+      const addr = $('#addr-list'); if (addr) { const html = addrHtml(); if (addr.dataset.sig !== html) { addr.innerHTML = html; addr.dataset.sig = html; } }
+      drawSparks();
+    }
+    if (page === 'remote') { const t = $('#tunnel-box'); if (t) t.innerHTML = tunnelHtml(); }
+  }
+
+  // ------------------------------------------------------------ generic setting rows
+  const BMIN = 300, BMAX = 150000;
+  const toSlider = k => Math.round((Math.log(k / BMIN) / Math.log(BMAX / BMIN)) * 1000);
+  const fromSlider = v => { const k = BMIN * (BMAX / BMIN) ** (v / 1000); const step = k < 2000 ? 100 : k < 20000 ? 500 : 1000; return Math.round(k / step) * step; };
+
+  function fieldHtml(key, extra = {}) {
+    const r = ST.schema[key];
+    if (!r) return '';
+    const v = get(ST.config, key);
+    const lab = `<div class="lab"><b>${esc(extra.label || r.label)}</b>${r.help ? `<p>${esc(r.help)}</p>` : ''}${r.restart ? '<span class="restart">Restarts the web server. Connected devices reconnect.</span>' : ''}</div>`;
+    let ctl = '';
+    let wide = false;
+    if (r.type === 'bool') ctl = `<input type="checkbox" class="switch" data-key="${key}" ${v ? 'checked' : ''}>`;
+    else if (r.type === 'enum' || r.type === 'enumInt') {
+      ctl = `<select data-key="${key}">${r.values.map((x, i) => `<option value="${esc(x)}" ${String(x) === String(v) ? 'selected' : ''}>${esc(r.labels ? r.labels[i] : `${x}${key === 'stream.fps' ? ' fps' : ''}`)}</option>`).join('')}</select>`;
+    } else if (r.type === 'display') {
+      const opts = [['primary', 'Main screen'], ...ST.displays.map(d => [d.id, `${d.name}${d.primary ? ' (main)' : ''} · ${d.width}×${d.height} ${d.refresh} Hz`])];
+      ctl = `<select data-key="${key}">${opts.map(([id, l]) => `<option value="${esc(id)}" ${String(id) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    } else if (key === 'stream.bitrateKbps') {
+      ctl = `<div class="rangewrap"><input type="range" min="0" max="1000" value="${toSlider(v)}" data-key="${key}" data-log="1"><output>${mbps(v)} Mbps</output></div>`;
+    } else if (r.type === 'num' && r.max <= 10) {
+      ctl = `<div class="rangewrap"><input type="range" min="${r.min}" max="${r.max}" step="${r.step || 0.1}" value="${v}" data-key="${key}"><output>${v}×</output></div>`;
+    } else if (r.type === 'int' || r.type === 'num') {
+      ctl = `<input type="number" data-key="${key}" value="${esc(v)}" min="${r.min}" max="${r.max}" step="${r.step || 1}" style="max-width:140px">`;
+    } else if (r.type === 'text') {
+      ctl = `<input type="text" data-key="${key}" value="${esc(v)}" placeholder="${esc(r.placeholder || '')}" spellcheck="false">`;
+    } else if (r.type === 'color') {
+      ctl = `<div class="colorwrap"><code>${esc(v)}</code><input type="color" data-key="${key}" value="${esc(v)}"></div>`;
+    } else if (r.type === 'json') {
+      wide = true;
+      ctl = `<textarea data-key="${key}" data-json="1" spellcheck="false">${esc(JSON.stringify(v, null, 2))}</textarea><div class="row end" style="margin-top:8px"><button class="btn small" data-action="save-json" data-for="${key}">Save</button></div>`;
+    }
+    return `<div class="field ${wide ? 'wide' : ''}">${lab}<div class="ctl">${ctl}</div></div>`;
+  }
+  const fields = keys => `<div class="card">${keys.map(k => fieldHtml(k)).join('')}</div>`;
+
+  async function save(changes, quiet) {
+    const r = await beam.updateConfig(changes);
+    if (r.changed.length) {
+      for (const [k, v] of Object.entries(changes)) {
+        if (k === 'presets') ST.config.presets = v;
+        else { const parts = k.split('.'); let o = ST.config; for (const p of parts.slice(0, -1)) o = o[p]; o[parts[parts.length - 1]] = v; }
+      }
+      if (!quiet) toast(r.changed.some(c => c.startsWith('server.')) ? 'Saved. Restarting the web server…' : 'Saved', 'ok');
+    } else if (!quiet) toast('That value was not accepted.', 'error');
+    return r;
+  }
+
+  $('#main').addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.log) t.nextElementSibling.textContent = `${mbps(fromSlider(+t.value))} Mbps`;
+    else if (t.type === 'range' && t.dataset.key) t.nextElementSibling.textContent = `${t.value}×`;
+    if (t.type === 'color') t.previousElementSibling.textContent = t.value;
+    if (t.id === 'pw-new') strength(t.value, '#pw-strength');
+    if (page === 'appearance') updatePreview();
+  });
+
+  $('#main').addEventListener('change', async e => {
+    const t = e.target;
+    const key = t.dataset.key;
+    if (!key || t.dataset.json) return;
+    const r = ST.schema[key];
+    let v;
+    if (t.type === 'checkbox') v = t.checked;
+    else if (t.dataset.log) v = fromSlider(+t.value);
+    else if (r.type === 'int' || r.type === 'num' || r.type === 'enumInt') v = Number(t.value);
+    else v = t.value;
+    await save({ [key]: v });
+    if (key === 'network.tunnel' || key.startsWith('stream.') || key.startsWith('appearance.')) render();
+  });
+
+  // ------------------------------------------------------------ Home
+  function statusHtml() {
+    const clients = STATUS.clients;
+    let dot, title, text, actions = '';
+    if (!ST.auth.passwordSet) {
+      dot = 'warn'; title = 'Set a password to start'; text = 'Nobody can connect until this PC has a password.';
+      actions = '<button class="btn primary" data-action="wizard">Set up</button>';
+    } else if (STATUS.server.error) {
+      dot = 'bad'; title = 'The web server isn\'t running'; text = esc(STATUS.server.error);
+    } else if (clients.length) {
+      const c = clients[0];
+      dot = 'live';
+      title = `Streaming to ${esc(c.device)}${clients.length > 1 ? ` and ${clients.length - 1} more` : ''}`;
+      text = `Connected for ${since(c.connectedAt)} from ${esc(c.ip)}${c.tunnel ? ', through the tunnel' : ''}.`;
+      if (clients.length > 1) actions = '<button class="btn danger" data-action="kick-all">Disconnect all</button>';
+    } else {
+      const remote = STATUS.urls.find(u => u.kind === 'remote');
+      const t = STATUS.tunnel;
+      dot = 'good'; title = 'Ready';
+      text = remote ? 'Reachable on your home network and from anywhere.' : 'Reachable on your home network. Turn on remote access to connect from anywhere else.';
+      actions = `<button class="btn" data-action="open-local">${icon('external')}Open in browser</button>`
+        + (remote ? `<button class="btn primary" data-action="qr" data-url="${esc(remote.url)}">${icon('qr')}QR code for phone</button>`
+          : ST.config.network.tunnel !== 'none' && t.state !== 'starting' && t.state !== 'downloading' ? '<button class="btn primary" data-action="tunnel-start">Turn on remote access</button>'
+            : '<button class="btn primary" data-page-go="remote">Remote access</button>');
+    }
+    return `<span class="dot ${dot}"></span><div><h2>${title}</h2><p>${text}</p></div><div class="actions">${actions}</div>`;
+  }
+
+  const KIND = { local: 'This PC', lan: 'Home network', tailscale: 'Tailscale', remote: 'Anywhere' };
+  function addrHtml() {
+    return STATUS.urls.map(u => {
+      const sub = (u.label.match(/\(([^)]+)\)/) || [])[1] || '';
+      return `<div class="link"><span class="kind ${u.kind === 'remote' ? 'remote' : ''}">${KIND[u.kind] || ''}</span>
+        <div class="url">${esc(u.url)}${sub ? `<span class="sub">${esc(sub[0].toUpperCase() + sub.slice(1))}</span>` : ''}</div>
+        <div class="acts"><button class="icon-btn" title="Copy link" data-action="copy" data-url="${esc(u.url)}">${icon('copy')}</button>
+        <button class="icon-btn" title="QR code for your phone" data-action="qr" data-url="${esc(u.url)}">${icon('qr')}</button>
+        <button class="icon-btn" title="Open" data-action="open" data-url="${esc(u.url)}">${icon('external')}</button></div></div>`;
+    }).join('');
+  }
+
+  // "MediaFoundationVideoEncodeAccelerator (NVIDIA H.264 Encoder MFT)" -> "NVIDIA GPU"
+  function encoderName(h) {
+    const e = h.encoder || '';
+    if (/NVIDIA/i.test(e)) return 'NVIDIA GPU';
+    if (/AMD|AMF/i.test(e)) return 'AMD GPU';
+    if (/Intel|QSV|Quick ?Sync/i.test(e)) return 'Intel GPU';
+    if (/MediaFoundation|External/i.test(e)) return 'GPU';
+    if (/OpenH264|libvpx|libaom|SVT|dav1d/i.test(e)) return 'Processor';
+    if (/^avc1|^vp0|^av01|^vp8/.test(e)) return h.hw ? 'GPU' : 'Auto';
+    return e || '–';
+  }
+
+  const stat = (label, value, unit = '', cls = '') => `<div class="stat"><span class="l">${label}</span><span class="v ${cls}">${value}${unit ? `<small>${unit}</small>` : ''}</span></div>`;
+
+  function soundStat(h) {
+    const a = STATUS.audio || {};
+    if (h.audio === 'off') return stat('Sound', 'Off', '', 'text');
+    if (a.state === 'error') return stat('Sound', `<span class="bad" title="${esc(a.message || '')}">Problem</span>`, '', 'text');
+    if (h.audio !== 'on') return stat('Sound', 'Starting', '', 'text');
+    const pct = Math.round(Math.min(1, (h.audioLevel || 0) * 1.4) * 100);
+    return stat('Sound', `<span title="${esc(a.format || '')}">On<span class="meter"><i style="width:${pct}%"></i></span></span>`, '', 'text');
+  }
+
+  function liveHtml() {
+    const clients = STATUS.clients;
+    if (!clients.length) return '<div class="card empty">No device is connected. Ping, latency, frame rate and connection details show up here while someone is streaming.</div>';
+    return clients.map(c => {
+      const s = c.stats || {}, h = c.host || {};
+      const mobile = /iPhone|iPad|Android/.test(c.device);
+      const route = s.route || h.route || '';
+      const notes = [h.limit && h.limit !== 'none' ? `Limited by ${esc(h.limit)}` : '', s.loss ? `${fmt(s.loss, 1)}% packet loss` : ''].filter(Boolean).join(' · ') || 'Last 2 minutes';
+      return `<div class="card">
+        <div class="session-head"><div class="ico">${icon(mobile ? 'phone' : 'monitor')}</div>
+          <div style="flex:1;min-width:0"><b>${esc(c.device)}</b><div class="meta">${c.detached ? '<span class="warn">Reconnecting…</span> · ' : ''}${esc(c.ip)} · ${c.transport === 'webrtc' ? 'WebRTC' : c.transport === 'websocket' ? 'WebSocket' : 'Starting'}${route ? ` · ${esc(route)}` : ''} · ${LATENCY_NAMES[c.latency] || ''} · ${since(c.connectedAt)}</div></div>
+          <button class="btn small danger" data-action="kick" data-id="${c.id}">Disconnect</button></div>
+        <div class="stats">
+          ${stat('Ping', fmt(s.ping), 'ms', grade(s.ping, 40, 100))}
+          ${stat(s.latencyEst ? 'Latency (est.)' : 'Latency', fmt(s.latency), 'ms', grade(s.latency, 60, 130))}
+          ${stat('Frame rate', fmt(s.fps ?? h.fps), 'fps')}
+          ${stat('Bitrate', mbps(s.kbps ?? h.kbps), 'Mbps')}
+          ${stat('Resolution', h.w ? `${h.w}×${h.h}` : s.w ? `${s.w}×${s.h}` : '–', '', 'text')}
+          ${stat('Encoder', `${esc(h.codec || s.codec || '–')} · ${esc(encoderName(h))}`, '', 'text')}
+          ${stat('Encode time', fmt(h.encodeMs, 1), 'ms')}
+          ${soundStat(h)}
+        </div>
+        <div class="chart"><div class="legend"><span><i style="background:var(--accent)"></i>Ping</span><span><i style="background:var(--accent-2)"></i>Latency</span><span class="right">${notes}</span></div>
+          <canvas class="spark" data-spark="${c.id}"></canvas></div>
+      </div>`;
+    }).join('');
+  }
+
+  function drawSparks() {
+    for (const cv of document.querySelectorAll('canvas[data-spark]')) {
+      const h = hist.get(cv.dataset.spark);
+      const dpr = devicePixelRatio || 1;
+      const W = cv.clientWidth * dpr, H = cv.clientHeight * dpr;
+      cv.width = W; cv.height = H;
+      const g = cv.getContext('2d');
+      const css = getComputedStyle(document.documentElement);
+      g.strokeStyle = css.getPropertyValue('--border').trim(); g.lineWidth = 1;
+      for (let i = 0; i <= 2; i++) { const y = Math.round((H - 1) * i / 2) + 0.5; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+      if (!h) continue;
+      const all = [...h.ping, ...h.lat].filter(v => v != null);
+      const max = Math.max(20, ...all) * 1.2;
+      const line = (arr, color) => {
+        g.beginPath(); let started = false;
+        arr.forEach((v, i) => { if (v == null) return; const x = (i / 59) * W, y = H - 2 - (v / max) * (H - 4); if (!started) { g.moveTo(x, y); started = true; } else g.lineTo(x, y); });
+        g.strokeStyle = color; g.lineWidth = 1.5 * dpr; g.lineJoin = 'round'; g.stroke();
+      };
+      line(h.lat, css.getPropertyValue('--accent-2').trim());
+      line(h.ping, css.getPropertyValue('--accent').trim());
+      g.fillStyle = css.getPropertyValue('--text-3').trim(); g.font = `${10.5 * dpr}px ${css.getPropertyValue('--font')}`;
+      g.fillText(`${Math.round(max)} ms`, 3 * dpr, 12 * dpr);
+    }
+  }
+
+  const LATENCY_NAMES = { lowest: 'Lowest latency', balanced: 'Balanced', smooth: 'Smoothest' };
+  const grade = (v, good, ok) => (v == null ? '' : v <= good ? 'good' : v <= ok ? 'warn' : 'bad');
+  function since(t) {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return `${s} s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min`;
+    return `${Math.floor(m / 60)} h ${m % 60} min`;
+  }
+
+  function alertsHtml() {
+    let out = '';
+    for (const p of ST.problems || []) out += note('warn', esc(p));
+    if (ST.inputError) out += note('bad', `<b>Mouse and keyboard control is unavailable.</b> ${esc(ST.inputError)}`);
+    if (ST.capInfo && ST.capInfo.webcodecs === false) out += note('warn', 'This PC can\'t encode WebSocket streams, so only WebRTC will work.');
+    const fw = (STATUS && STATUS.firewall) || {};
+    if (fw.state === 'blocked') {
+      out += note('warn', `<b>Devices on your Wi-Fi can't reach this PC.</b> ${esc(fw.detail || '')} Remote access through the tunnel isn't affected.
+        <div class="row" style="margin-top:8px"><button class="btn small" data-action="firewall-fix">Allow through Windows Firewall</button></div>`);
+    }
+    const u = (STATUS && STATUS.update) || {};
+    if (u.state === 'ready') {
+      out += note('info', `<b>Version ${esc(u.latest)} is ready to install.</b> ${ST.config.app.updates === 'auto' ? 'It installs by itself once nobody has been connected for a few minutes.' : 'Restart the app to finish.'}
+        <div class="row" style="margin-top:8px"><button class="btn small primary" data-action="update-install">Restart and update</button></div>`);
+    }
+    return out ? `<div style="margin:-8px 0 16px">${out}</div>` : '';
+  }
+
+  function pageHome() {
+    return `<div class="page-head"><div><h1>Home</h1><p>This PC's status and the links that reach it.</p></div></div>
+      <div id="alerts">${alertsHtml()}</div>
+      <div class="card status" id="status" style="margin-bottom:28px">${statusHtml()}</div>
+      ${section('Links', 'Open one in any browser, or scan its QR code with your phone.', `<div class="card rows" id="addr-list">${addrHtml()}</div>`, `<button class="btn ghost small" data-page-go="remote">Remote access settings</button>`)}
+      ${section('Live session', '', `<div id="live">${liveHtml()}</div>`)}`;
+  }
+
+  // ------------------------------------------------------------ Remote access
+  function tunnelHtml() {
+    const t = STATUS.tunnel;
+    const label = { stopped: 'Off', downloading: 'Downloading', starting: 'Starting', online: 'On', error: 'Problem' }[t.state] || t.state;
+    const dot = { online: 'good', error: 'bad', starting: 'warn', downloading: 'warn' }[t.state] || '';
+    let html = `<div class="statusline"><span class="dot ${dot}"></span><span class="label">${label}</span><span class="msg">${esc(t.message || (t.state === 'stopped' ? 'Remote access is off.' : ''))}</span>
+      ${t.state === 'downloading' ? `<div class="progress"><i style="width:${Math.round((t.progress || 0) * 100)}%"></i></div>` : ''}
+      ${t.state === 'stopped' || t.state === 'error' ? `<button class="btn primary small" data-action="tunnel-start">${icon('play')}Start</button>` : `<button class="btn small" data-action="tunnel-stop">${icon('stop')}Stop</button>`}</div>`;
+    if (t.url) {
+      html += `<div class="link"><span class="kind remote">Link</span><div class="url">${esc(t.url)}</div>
+        <div class="acts"><button class="icon-btn" data-action="copy" data-url="${esc(t.url)}" title="Copy link">${icon('copy')}</button>
+        <button class="icon-btn" data-action="qr" data-url="${esc(t.url)}" title="QR code">${icon('qr')}</button>
+        <button class="icon-btn" data-action="open" data-url="${esc(t.url)}" title="Open">${icon('external')}</button></div></div>`;
+    }
+    return html;
+  }
+  const tunnelCard = () => `<div class="card rows" id="tunnel-box">${tunnelHtml()}</div>`;
+
+  function pageRemote() {
+    const tun = ST.config.network.tunnel;
+    const sel = tun === 'cloudflare' ? 'cloudflare' : tun === 'cloudflare-domain' ? 'domain' : tun === 'custom' ? 'custom' : remoteGuide;
+    const ts = STATUS.urls.find(u => u.kind === 'tailscale');
+    const choice = (id, title, desc, hint) => `<button class="choice ${sel === id ? 'active' : ''}" data-method="${id}"><span class="radio"></span><b>${title}</b><span>${desc}</span><div class="hint">${hint}</div></button>`;
+    let body = '';
+    if (sel === 'cloudflare') {
+      body = section('Quick link', 'A private https:// link that works from anywhere: mobile data, work, a friend\'s Wi-Fi. No router changes, no account. Cloudflare\'s free <code>cloudflared</code> tool is downloaded the first time.',
+        `${tunnelCard()}<div style="height:12px"></div>${fields(['network.tunnelAutoStart'])}
+        ${note('info', 'The link changes every time the tunnel starts, so check here (or use "Copy remote link" in the tray menu) after a restart. For a link that never changes, use your own domain or Tailscale.')}
+        <div class="row" style="margin-top:12px"><button class="btn ghost small" data-action="tunnel-log">Show tunnel log</button></div>`);
+    } else if (sel === 'domain') {
+      const d = ST.domain || { mode: 'none' };
+      const ready = d.mode !== 'none';
+      const port = ST.config.server.port;
+      body = section('Your own domain', 'Reach this PC at an address you own, like <code>https://pc.yourname.com</code>. It never changes, has a real HTTPS certificate, and runs through Cloudflare\'s free tunnel, so no router changes are needed.',
+        `<div class="card pad"><ol class="steps">
+          <li class="${ready ? 'done' : ''}"><b>Add your domain to Cloudflare</b><p>The free plan is enough. Point your domain's nameservers to Cloudflare; it shows you how. No domain yet? You can buy one from Cloudflare or any registrar.</p>
+            <button class="btn small" data-action="open" data-url="https://dash.cloudflare.com/">${icon('external')}Open Cloudflare</button></li>
+          <li class="${ready ? 'done' : ''}"><b>Choose this PC's address and connect</b><p>Any name on your domain. Cloudflare opens in your browser once: choose the domain and click <b>Authorize</b>. The app then creates the tunnel and the DNS record.</p>
+            <div class="row"><input class="input" id="domain-host" placeholder="pc.yourdomain.com" value="${esc(d.hostname || '')}" spellcheck="false" style="flex:1;min-width:220px">
+            <button class="btn primary" data-action="domain-setup">${ready ? 'Set up again' : 'Connect with Cloudflare'}</button></div>
+            <div id="domain-box">${domainStepHtml()}</div></li>
+          <li class="${STATUS.tunnel.state === 'online' && ready ? 'done' : ''}"><b>Keep it on</b><p>It starts on its own after setup. Turn on "Start remote access when the app opens" below to keep it running.</p></li>
+        </ol></div>
+        <div style="height:12px"></div>${tunnelCard()}<div style="height:12px"></div>${fields(['network.tunnelAutoStart'])}
+        ${ready ? `<p class="muted" style="margin:12px 0 0">Connected as <b>${esc(d.hostname)}</b> using ${d.mode === 'token' ? 'a tunnel token' : 'a tunnel made by this app'}. <a href="#" data-action="domain-forget">Disconnect domain</a> · <a href="#" data-action="domain-relogin">Use a different Cloudflare domain</a></p>` : ''}`)
+        + section('Set it up in Cloudflare yourself', 'If you\'d rather create the tunnel in Cloudflare\'s dashboard.',
+          `<div class="card faq"><details><summary>Paste a tunnel token</summary>
+            <ol>
+              <li>In Cloudflare, open <b>Zero Trust → Networks → Tunnels → Create a tunnel</b>, choose <b>Cloudflared</b> and name it.</li>
+              <li>On the install step, copy the command shown (or just the long code in it that starts with <code>ey</code>). You don't need to run it.</li>
+              <li>Add a <b>public hostname</b>: your address, service <b>HTTP</b>, URL <code>localhost:${port}</code>.</li>
+              <li>Paste the token and enter your address in step 2 above.</li>
+            </ol>
+            <div class="row"><input class="input" id="domain-token" placeholder="eyJhIjoi…" spellcheck="false" style="flex:1;min-width:220px"><button class="btn" data-action="domain-token">Save and start</button></div>
+          </details></div>`);
+    } else if (sel === 'tailscale') {
+      body = section('Tailscale', 'Puts this PC and your devices on a private network of their own. Nobody else can even see the page, and the address never changes. Free for personal use.',
+        `${ts ? `<div style="margin:-4px 0 12px">${note('ok', `Tailscale is running on this PC. Your link: <code>${esc(ts.url)}</code>`)}</div>` : ''}
+        <div class="card pad"><ol class="steps">
+          <li class="${ts ? 'done' : ''}"><b>Install Tailscale on this PC</b><p>Download it, install it and sign in with a Google, Microsoft, GitHub or Apple account.</p><button class="btn small" data-action="open" data-url="https://tailscale.com/download">${icon('external')}tailscale.com/download</button></li>
+          <li><b>Install it on your phone or laptop</b><p>Same app, signed in to the same account, switched on.</p></li>
+          <li class="${ts ? 'done' : ''}"><b>Open your Tailscale link</b><p>It appears on Home as soon as Tailscale is running here${ts ? `: <code>${esc(ts.url)}</code>` : ''}. Bookmark it or add it to your home screen.</p></li>
+        </ol></div>
+        <p class="muted" style="margin:12px 0 0">WebRTC connects directly over Tailscale, so latency stays as low as it can be.</p>`);
+    } else if (sel === 'portforward') {
+      body = section('Port forwarding', 'Your router sends outside connections straight to this PC. Fast, but it\'s the most exposed option: use a long password and two-step sign-in.',
+        `<div class="card pad"><ol class="steps">
+          <li><b>Give this PC a fixed address on your network</b><p>In your router's settings, reserve this PC's current address (DHCP reservation).</p></li>
+          <li><b>Forward the port</b><p>Forward TCP port <code>${ST.config.server.port}</code>${ST.config.server.https ? ` and <code>${ST.config.server.httpsPort}</code>` : ''} to this PC. Turn on "Also serve HTTPS" below and use the https address so your password is encrypted.</p></li>
+          <li><b>Find your public address</b><p>Search "what is my IP" on this PC. Your link is <code>https://YOUR-IP:${ST.config.server.httpsPort}</code>. A free dynamic DNS name keeps it working when the IP changes.</p></li>
+          <li><b>Save it below</b><p>So it shows on Home with a QR code.</p></li>
+        </ol></div><div style="height:12px"></div>${fields(['server.https', 'network.publicUrl'])}`);
+    } else {
+      body = section('Your own tunnel tool', 'Run any tunnel program from here, such as ngrok. The app starts and stops it and shows the first https:// link it prints.',
+        `${tunnelCard()}<div style="height:12px"></div>${fields(['network.tunnelCommand', 'network.publicUrl', 'network.tunnelAutoStart'])}
+        ${note('info', 'Example: <code>ngrok http {port} --log stdout</code>')}`);
+    }
+    return `<div class="page-head"><div><h1>Remote access</h1><p>Reach this PC from outside your home. Every option is protected by your password.</p></div></div>
+      ${!ST.auth.passwordSet ? `<div style="margin:-8px 0 16px">${note('warn', 'Choose a password first. Remote access won\'t start without one.')}</div>` : ''}
+      <div class="choices methods">
+        ${choice('cloudflare', 'Quick link', 'Free Cloudflare tunnel, works anywhere.', 'No account needed')}
+        ${choice('domain', 'Your own domain', 'pc.yourname.com through Cloudflare.', 'Permanent address')}
+        ${choice('tailscale', 'Tailscale', 'A private network for your devices.', 'Most private')}
+        ${choice('portforward', 'Port forwarding', 'A rule on your router.', 'Advanced')}
+        ${choice('custom', 'Other tool', 'ngrok or any tunnel program.', 'Advanced')}
+      </div>
+      ${body}
+      ${section('Direct connections', 'WebRTC tries to connect your device straight to this PC, even when you opened a tunnel link, for the lowest latency. These servers help it find a path. If direct connections never work on your networks, add a TURN server; the stream otherwise falls back to the tunnel.', fields(['network.iceServers']))}`;
+  }
+
+  // Progress of "Connect with Cloudflare", pushed from the app while it works.
+  let domainStep = null;
+  function domainStepHtml() {
+    const s = domainStep;
+    if (!s) return '';
+    const busy = ['tool', 'login', 'tunnel', 'dns'].includes(s.step);
+    const kind = s.step === 'error' ? 'bad' : s.step === 'done' ? 'ok' : s.step === 'ask' ? 'warn' : '';
+    const extra = (s.loginUrl ? `<div class="row" style="margin-top:8px"><button class="btn small" data-action="open" data-url="${esc(s.loginUrl)}">${icon('external')}Open the Cloudflare page</button><span class="faint">if it didn't open by itself</span></div>` : '')
+      + (s.needOverwrite ? '<div class="row" style="margin-top:8px"><button class="btn small primary" data-action="domain-overwrite">Replace it</button><button class="btn small" data-action="domain-cancel">Keep the old record</button></div>' : '');
+    if (busy) return `<div class="note"><span class="spin"></span><div class="body">${esc(s.message)}${extra}</div></div>`;
+    return note(kind, esc(s.message) + extra);
+  }
+  beam.onDomain(s => {
+    domainStep = s;
+    const box = $('#domain-box');
+    if (box) box.innerHTML = domainStepHtml();
+    if (s.step === 'done') toast(s.message, 'ok');
+  });
+
+  // ------------------------------------------------------------ Quality
+  function pageQuality() {
+    const s = ST.config.stream;
+    const presets = ST.config.presets;
+    return `<div class="page-head"><div><h1>Stream quality</h1><p>This PC's defaults. Each browser can also choose its own quality from the toolbar.</p></div></div>
+      ${section('Preset', 'Sets resolution, frame rate and bitrate in one go.',
+        `<div class="choices">${presets.map((p, i) => `<button class="choice ${p.resolution === s.resolution && p.fps === s.fps && p.bitrateKbps === s.bitrateKbps ? 'active' : ''}" data-preset="${i}"><span class="radio"></span><b>${esc(p.name)}</b><span class="num">${p.resolution === 'native' ? 'Native' : p.resolution} · ${p.fps} fps · ${mbps(p.bitrateKbps)} Mbps</span></button>`).join('')}</div>`)}
+      ${section('Picture', '', fields(['stream.display', 'stream.resolution', 'stream.fps', 'stream.bitrateKbps', 'stream.codec', 'stream.contentHint', 'stream.degradation']))}
+      ${section('Sound and connection', '', fields(['stream.audio', 'stream.transport', 'stream.keyframeSeconds', 'stream.hardwareEncoding']))}
+      ${section('Edit presets', 'These appear in every browser\'s quality menu.',
+        `<div class="card"><table class="edit"><thead><tr><th>Name</th><th>Resolution</th><th>Frame rate</th><th>Bitrate (kbps)</th><th></th></tr></thead>
+        <tbody id="preset-rows">${presets.map((p, i) => presetRow(p, i)).join('')}</tbody></table>
+        <div class="row" style="padding:12px 16px;border-top:1px solid var(--border);margin-top:8px"><button class="btn small" data-action="preset-add">${icon('plus')}Add preset</button><span style="flex:1"></span><button class="btn ghost small" data-action="preset-reset">Restore defaults</button><button class="btn primary small" data-action="preset-save">Save presets</button></div></div>`)}`;
+  }
+  function presetRow(p, i) {
+    const res = ST.schema['stream.resolution'], fps = ST.schema['stream.fps'];
+    return `<tr data-row="${i}"><td><input value="${esc(p.name)}" data-p="name" maxlength="24"></td>
+      <td><select data-p="resolution">${res.values.map((v, j) => `<option value="${v}" ${v === p.resolution ? 'selected' : ''}>${esc(res.labels[j])}</option>`).join('')}</select></td>
+      <td><select data-p="fps">${fps.values.map(v => `<option value="${v}" ${v === p.fps ? 'selected' : ''}>${v} fps</option>`).join('')}</select></td>
+      <td><input type="number" data-p="bitrateKbps" value="${p.bitrateKbps}" min="300" max="150000" step="100"></td>
+      <td><button class="icon-btn" data-action="preset-del" title="Remove">${icon('trash')}</button></td></tr>`;
+  }
+  function readPresetRows() {
+    return [...document.querySelectorAll('#preset-rows tr')].map(tr => ({
+      name: tr.querySelector('[data-p=name]').value.trim(),
+      resolution: tr.querySelector('[data-p=resolution]').value,
+      fps: Number(tr.querySelector('[data-p=fps]').value),
+      bitrateKbps: Number(tr.querySelector('[data-p=bitrateKbps]').value),
+    })).filter(p => p.name);
+  }
+
+  // ------------------------------------------------------------ Security
+  function strength(pw, sel) {
+    let score = 0;
+    if (pw.length >= 8) score++;
+    if (pw.length >= 12) score++;
+    if (pw.length >= 16) score++;
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
+    if (/\d/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw)) score++;
+    const el = document.querySelector(sel);
+    if (!el) return score;
+    const pct = Math.min(100, (score / 6) * 100);
+    const color = score <= 2 ? 'var(--bad)' : score <= 4 ? 'var(--warn)' : 'var(--good)';
+    el.innerHTML = `<i style="width:${pw ? pct : 0}%;background:${color}"></i>`;
+    return score;
+  }
+
+  function logHtml() {
+    const log = ST.log || [];
+    if (!log.length) return '<div class="empty">Nothing yet.</div>';
+    return log.map(e => `<div><time>${new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time><span class="k ${esc(e.kind)}">${esc(e.kind)}</span><span class="msg">${esc(e.text)}</span></div>`).join('');
+  }
+
+  function pageSecurity() {
+    const a = ST.auth;
+    return `<div class="page-head"><div><h1>Security</h1><p>Only someone with your password, and your code if you turn it on, can see or control this PC.</p></div></div>
+      ${section(a.passwordSet ? 'Password' : 'Choose a password', a.passwordSet ? 'Changing it signs every device out.' : 'At least 8 characters. Longer is better; a short sentence works well.',
+        `<div class="card pad"><div class="grid2" style="gap:8px"><input class="input" type="password" id="pw-new" placeholder="New password" autocomplete="new-password"><input class="input" type="password" id="pw-confirm" placeholder="Type it again" autocomplete="new-password"></div>
+          <div class="strength" id="pw-strength"><i></i></div>
+          <div class="row end" style="margin-top:12px"><button class="btn primary" data-action="set-password">${a.passwordSet ? 'Change password' : 'Save password'}</button></div></div>`)}
+      ${section('Two-step sign-in', 'Also asks for a 6-digit code from an authenticator app on your phone. Recommended if you use remote access.',
+        `<div class="card">${a.totpEnabled
+          ? '<div class="statusline"><span class="dot good"></span><span class="label">On</span><span class="msg">A code is required at sign-in.</span><button class="btn small danger" data-action="totp-off">Turn off</button></div>'
+          : `<div class="statusline"><span class="dot"></span><span class="label">Off</span><span class="msg">Only the password is needed.</span><button class="btn small primary" data-action="totp-on" ${a.passwordSet ? '' : 'disabled'}>Turn on</button></div>`}</div>`)}
+      ${section('Rules', '', fields(['security.allowControl', 'security.maxClients', 'security.newClientPolicy', 'security.sessionDays', 'security.maxFailedAttempts', 'security.lockoutMinutes', 'security.notifyOnSignIn', 'security.blockWinKey', 'security.allowedIps']))}
+      ${section('Embedding', 'Show this page inside your own website with an iframe. Enter your site\'s address, or * to allow any site.', `${fields(['security.embedOrigins'])}<div id="embed-box">${embedHtml()}</div>`)}
+      ${section('Signed-in devices', 'Browsers that are currently allowed in.',
+        `<div class="card rows log">${a.sessions.length ? a.sessions.slice().reverse().map(s => `<div><time>${new Date(s.created).toLocaleDateString()}</time><span class="msg">${esc(s.device || 'Browser')} · ${esc(s.ip)}</span><span class="faint">until ${new Date(s.expires).toLocaleDateString()}</span></div>`).join('') : '<div class="empty">No devices are signed in.</div>'}</div>`,
+        `<button class="btn small danger" data-action="signout-all" ${a.sessions.length ? '' : 'disabled'}>Sign out all</button>`)}
+      ${section('Security log', 'Sign-ins, wrong passwords, lockouts and connections.', `<div class="card rows log" id="seclog">${logHtml()}</div>`,
+        `<button class="btn ghost small" data-action="open-path" data-which="log">${icon('file')}Open log file</button>`)}`;
+  }
+
+  // The address to put in the iframe: the remote one when there is one (https works on any site).
+  function embedUrl() {
+    const urls = STATUS.urls || [];
+    const pick = urls.find(u => u.kind === 'remote') || urls.find(u => u.kind === 'tailscale') || urls.find(u => u.kind === 'lan') || urls[0];
+    return pick ? pick.url : `http://localhost:${ST.config.server.port}/`;
+  }
+
+  function embedHtml() {
+    if (!String(ST.config.security.embedOrigins || '').trim()) {
+      return note('info', 'Embedding is off, so no other website can show this page. Enter your site above (or *) to turn it on.');
+    }
+    const url = embedUrl();
+    const code = `<iframe src="${url}" allow="fullscreen; autoplay; clipboard-read; clipboard-write; keyboard-map" allowfullscreen style="width:100%;height:600px;border:0"></iframe>`;
+    const warn = !/^https:/i.test(url)
+      ? note('warn', 'This address isn\'t https://, so websites that use https can\'t show it. Turn on remote access (a quick link or your own domain) and use that address.')
+      : ST.config.network.tunnel === 'cloudflare' ? note('info', 'Quick links change every time remote access starts. For a frame that keeps working, use your own domain.') : '';
+    return `<div class="card pad" style="margin-top:12px"><h3>Code for your website</h3>
+      <pre class="term">${esc(code)}</pre>${warn}
+      <p class="faint" style="margin:10px 0 0">Inside a frame the page signs in with its own token, so it works even where the browser blocks cookies (school and work Chromebooks, Safari).</p>
+      <div class="row" style="margin-top:12px"><button class="btn" data-action="copy-code" data-url="${esc(code)}">${icon('copy')}Copy code</button>
+        <button class="btn" data-action="embed-test" data-url="${esc(url)}">${icon('external')}Test on this PC</button></div></div>`;
+  }
+
+  // ------------------------------------------------------------ Browser controls
+  function pageBrowser() {
+    const sc = [['Ctrl + Alt + Shift + M', 'Show the toolbar'], ['Ctrl + Alt + Shift + S', 'Cycle the stats overlay'], ['Ctrl + Alt + Shift + F', 'Full screen (also captures Windows-key shortcuts in Chrome and Edge)'], ['Esc', 'Release the mouse in game mode'], ['Ctrl + V', 'Paste text from your device into the PC (with clipboard sharing on)']];
+    return `<div class="page-head"><div><h1>Browser controls</h1><p>Starting values for every browser. Each device can change these for itself in its own settings.</p></div></div>
+      ${section('Mouse, touch and keyboard', '', fields(['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync']))}
+      ${section('Picture and sound', '', fields(['client.latency', 'client.scaleMode', 'client.smoothing', 'client.sound']))}
+      ${section('Overlay and toolbar', '', fields(['client.stats', 'client.statsPosition', 'client.toolbar']))}
+      ${section('Keyboard shortcuts', '', `<div class="card rows kv">${sc.map(([k, v]) => `<div><span class="key"><code>${k}</code></span><span>${v}</span></div>`).join('')}</div>`)}`;
+  }
+
+  // ------------------------------------------------------------ Appearance
+  function pageAppearance() {
+    return `<div class="page-head"><div><h1>Appearance</h1><p>Applies to this app and the page your devices see.</p></div></div>
+      <div class="grid2" style="margin-bottom:28px;align-items:start">
+        <div><div class="section-head"><div><h2>Sign-in page</h2></div></div>
+          <div class="card" style="padding-top:16px"><div class="preview" id="preview"><div class="pv-card"><img src="../../assets/icon.png" alt=""><h4 id="pv-name"></h4><p id="pv-text"></p><div class="pv-in"></div><div class="pv-btn"></div></div></div></div></div>
+        <div><div class="section-head"><div><h2>Brand</h2></div></div>${fields(['appearance.appName', 'appearance.welcomeText', 'appearance.accent', 'appearance.accent2'])}</div>
+      </div>
+      ${section('Style', '', fields(['appearance.theme', 'appearance.background', 'appearance.radius', 'appearance.font']))}
+      ${section('Custom CSS', 'For anything else, edit <code>custom.css</code> in the settings folder. It\'s added to both the browser page and this app; save it and refresh.',
+        `<div class="card pad row"><button class="btn" data-action="open-path" data-which="css">${icon('file')}Edit custom.css</button><button class="btn ghost" data-action="appearance-reset">Restore default look</button></div>`)}`;
+  }
+  function updatePreview() {
+    const p = $('#preview');
+    if (!p) return;
+    const val = k => { const el = document.querySelector(`[data-key="${k}"]`); return el ? el.value : get(ST.config, k); };
+    p.querySelector('.pv-btn').style.background = val('appearance.accent');
+    $('#pv-name').textContent = val('appearance.appName');
+    $('#pv-text').textContent = val('appearance.welcomeText');
+  }
+
+  // ------------------------------------------------------------ App & network
+  const RELEASES = 'https://github.com/AncientRemain/remoteweb/releases';
+  function updateHtml() {
+    const u = STATUS.update || { state: 'disabled' };
+    const when = u.checkedAt ? ` · checked ${since(u.checkedAt)} ago` : '';
+    let dot = '', label = '', msg = '', btn = '';
+    switch (u.state) {
+      case 'disabled': label = 'Off'; msg = esc(u.message || 'Updates are checked only in the installed app.'); break;
+      case 'idle': label = 'Not checked yet'; msg = `Version ${esc(u.current || ST.version)}`; btn = '<button class="btn small" data-action="update-check">Check now</button>'; break;
+      case 'checking': dot = 'warn'; label = 'Checking'; msg = 'Looking for a new version…'; break;
+      case 'available': dot = 'warn'; label = 'Update available'; msg = `Version ${esc(u.latest)} is out (you have ${esc(u.current)}).`; btn = '<button class="btn small primary" data-action="update-download">Download</button>'; break;
+      case 'downloading': dot = 'warn'; label = 'Downloading'; msg = `Version ${esc(u.latest)} · ${u.progress || 0}%`; btn = `<div class="progress"><i style="width:${u.progress || 0}%"></i></div>`; break;
+      case 'ready': dot = 'good'; label = 'Ready to install'; msg = `Version ${esc(u.latest)} is downloaded.`; btn = '<button class="btn small primary" data-action="update-install">Restart and update</button>'; break;
+      case 'installing': dot = 'warn'; label = 'Installing'; msg = 'The app closes, updates and opens again by itself.'; break;
+      case 'error': dot = 'bad'; label = 'Problem'; msg = esc(u.message || 'The update check failed.'); btn = '<button class="btn small" data-action="update-check">Try again</button>'; break;
+      default: dot = 'good'; label = 'Up to date'; msg = `Version ${esc(u.current || ST.version)}${when}`; btn = '<button class="btn small" data-action="update-check">Check now</button>';
+    }
+    return `<div class="statusline"><span class="dot ${dot}"></span><span class="label">${label}</span><span class="msg">${msg}</span>${btn}
+      <button class="btn ghost small" data-action="open" data-url="${esc(u.url || RELEASES)}">${icon('external')}Releases</button></div>`;
+  }
+
+  function firewallHtml() {
+    const fw = STATUS.firewall || {};
+    if (fw.state === 'blocked') return `<span class="warn">${esc(fw.detail || 'Blocking other devices.')}</span> <button class="btn small" data-action="firewall-fix">Allow</button>`;
+    if (fw.state === 'ok') return esc(fw.detail || 'Allows devices on your network.');
+    return 'Not checked <button class="btn ghost small" data-action="firewall-check">Check</button>';
+  }
+
+  function pageApp() {
+    const ci = ST.capInfo || {};
+    const au = STATUS.audio || {};
+    const cpu = STATUS.cpu ? `${fmt(STATUS.cpu.total, 1)}%` : '–';
+    const kv = (k, v) => `<div><span class="key">${k}</span><span>${v}</span></div>`;
+    return `<div class="page-head"><div><h1>App &amp; network</h1><p>How the app runs on this PC.</p></div></div>
+      ${section('App', '', fields(['app.startWithWindows', 'app.startMinimized', 'app.closeToTray', 'app.keepAwake', 'app.streamPriority']))}
+      ${section('Updates', 'New versions come from github.com/AncientRemain/remoteweb. Nothing is downloaded while someone is streaming.',
+        `<div class="card"><div id="update-box">${updateHtml()}</div>${fieldHtml('app.updates')}</div>`)}
+      ${section('Web server', '', fields(['server.port', 'server.bindAddress', 'server.https', 'server.httpsPort']))}
+      ${section('Administrator mode', 'Windows doesn\'t let normal apps click or type into programs running as administrator (Task Manager, installers, some games). Restart as administrator to control those too. The UAC prompt and lock screen can never be streamed.',
+        '<div class="card pad"><button class="btn" data-action="restart-admin">Restart as administrator</button></div>')}
+      ${section('Settings file', 'Everything here is stored in <code>config.json</code>. Edit it by hand if you like; the app reloads it when you save. It never contains your password, so it\'s safe to share.',
+        `<div class="card pad"><div class="row">
+          <button class="btn" data-action="open-path" data-which="folder">${icon('folder')}Open folder</button>
+          <button class="btn" data-action="open-path" data-which="config">${icon('file')}Edit config.json</button>
+          <button class="btn" data-action="export">Export</button>
+          <button class="btn" data-action="import">Import</button>
+          <span style="flex:1"></span>
+          <button class="btn danger" data-action="reset-all">Reset all</button>
+        </div><p class="faint mono" style="margin:12px 0 0;word-break:break-all">${esc(ST.userDir)}</p></div>`)}
+      ${section('Diagnostics', '', `<div class="card rows kv">
+          ${kv('Version', esc(ST.version))}
+          ${kv('Keyboard and mouse', ST.inputError ? `<span class="bad">${esc(ST.inputError)}</span>` : 'Working')}
+          <div><span class="key">Windows Firewall</span><span id="fw-value">${firewallHtml()}</span></div>
+          ${kv('System sound', `${esc(au.state || 'off')}${au.format ? ` · ${esc(au.format)}` : ''}${au.message ? ` · ${esc(au.message)}` : ''}`)}
+          ${kv('WebSocket encoder', ci.webcodecs ? 'Available' : '<span class="warn">Not available</span>')}
+          ${kv('Opus sound encoder', ci.audioEncoder ? 'Available' : '<span class="warn">Not available</span>')}
+          ${kv('App CPU use', cpu)}
+          ${kv('Screens', ST.displays.map(d => `${esc(d.name)} ${d.width}×${d.height} @ ${d.refresh} Hz`).join(', '))}
+        </div><div class="row" style="margin-top:12px"><button class="btn ghost small" data-action="cap-log">Streamer log</button><button class="btn ghost small" data-action="tunnel-log">Tunnel log</button></div>`)}`;
+  }
+
+  // ------------------------------------------------------------ Setup guide
+  function checks() {
+    const urls = STATUS.urls;
+    return [
+      { done: ST.auth.passwordSet, title: 'Choose a password', text: 'Protects the PC. Nothing works until it\'s set.', go: ['security', 'Security'] },
+      { done: ST.auth.signedInOnce, title: 'Try it on this PC', text: 'Open the page in your browser and sign in.', action: ['open-local', 'Open in browser'] },
+      { done: urls.some(u => u.kind === 'remote' || u.kind === 'tailscale'), title: 'Set up remote access', text: 'Quick link, your own domain, Tailscale or port forwarding.', go: ['remote', 'Remote access'] },
+      { done: ST.auth.totpEnabled, title: 'Turn on two-step sign-in', text: 'Recommended. A code from your phone on top of the password.', go: ['security', 'Security'] },
+      { done: ST.config.app.startWithWindows, title: 'Start with Windows', text: 'Optional. Keeps the PC reachable after a restart.', go: ['app', 'App settings'] },
+    ];
+  }
+  const setupLeft = () => (ST && STATUS ? checks().slice(0, 3).filter(c => !c.done).length : 0);
+
+  function pageGuide() {
+    const list = checks();
+    return `<div class="page-head"><div><h1>Setup guide</h1><p>From install to streaming this PC to your phone in about five minutes.</p></div>
+        <button class="btn" data-action="wizard">Run setup again</button></div>
+      ${section('Checklist', 'Updates itself as you go.', `<div class="card rows checklist">
+        ${list.map(c => `<div class="${c.done ? 'done-text' : ''}"><span class="check ${c.done ? 'done' : ''}"></span><div class="txt"><b>${c.title}</b><p>${c.text}</p></div>
+          ${c.done ? '' : c.go ? `<button class="btn small" data-page-go="${c.go[0]}">${c.go[1]}</button>` : `<button class="btn small" data-action="${c.action[0]}">${c.action[1]}</button>`}</div>`).join('')}
+      </div>`)}
+      ${section('How it works', '', `<div class="card pad"><ol class="steps">
+          <li><b>This app runs on the PC you want to reach</b><p>It captures the screen and sound and serves a web page on port ${ST.config.server.port}. Keep it running; it lives in the tray.</p></li>
+          <li><b>You open the page in any browser</b><p>Chrome, Edge, Safari or Firefox on a phone, tablet, laptop or another PC. Nothing to install there. Sign in with your password.</p></li>
+          <li><b>The picture takes the fastest path</b><p><b>WebRTC</b> connects your device straight to the PC when it can, for the lowest latency, even through a tunnel. When it can't, the stream goes through the web connection itself (<b>WebSocket</b>), which works through any tunnel. Auto mode chooses for you.</p></li>
+          <li><b>Your input goes back to the PC</b><p>Mouse, keyboard and touch arrive as real input, so games and every app respond. Lock the mouse for 3D games; on phones, drag like a touchpad.</p></li>
+        </ol></div>`)}
+      ${section('Connecting from outside your home', '', `<div class="card pad"><ol class="steps">
+          <li><b>Quick link</b><p>Remote access → Quick link → Start. Open the https:// link it shows or scan its QR code. It changes each time it starts.</p></li>
+          <li><b>Your own domain</b><p>Remote access → Your own domain. Enter an address like pc.yourname.com and press Connect with Cloudflare. It never changes.</p></li>
+          <li><b>Tailscale</b><p>Install Tailscale on the PC and your phone with the same account, then use the 100.x.x.x link on Home.</p></li>
+          <li><b>Port forwarding</b><p>Forward the port on your router and turn on HTTPS. Pair it with two-step sign-in.</p></li>
+        </ol></div>`)}
+      ${section('Questions and fixes', '', `<div class="card faq">
+        <details><summary>The picture is black or frozen</summary><p>Windows hides the lock screen and administrator (UAC) prompts from every screen-capture app. Turn on "Keep this PC awake" and don't lock the PC (Win+L) while you're away. If a game runs in exclusive full screen, switch it to borderless window.</p></details>
+        <details><summary>I can see the screen but can't click some windows</summary><p>Those programs run as administrator. Go to App &amp; network → Restart as administrator.</p></details>
+        <details><summary>It's laggy or blurry</summary><p>Open the toolbar (move the mouse to the top edge) → Quality, and try Balanced or Data saver. The stats overlay shows ping (the network round trip) and latency (from the PC's screen to yours). On Wi-Fi, a 5 GHz network helps.</p></details>
+        <details><summary>It switched to "web stream"</summary><p>WebRTC couldn't find a direct path between your networks, which is common on mobile data and strict work networks, so the stream goes through the tunnel instead. It still works with slightly higher latency. A TURN server (Remote access → Direct connections) can fix it.</p></details>
+        <details><summary>How do I type on my phone?</summary><p>Tap the keyboard button in the toolbar. For text that won't paste, use the clipboard button → Type on the PC. The keys button has the Windows key, Alt+Tab, Task Manager and arrow keys.</p></details>
+        <details><summary>Sound echoes when I test on this PC</summary><p>The page plays the PC's sound back into itself. Mute the browser tab, or set Sound to "On, and mute this PC's speakers".</p></details>
+        <details><summary>Can friends use it?</summary><p>Yes. Give them the installer. Each person installs it on their own PC and chooses their own password; nobody can reach anyone else's PC. Windows may say it's an unrecognised app the first time: More info → Run anyway.</p></details>
+        <details><summary>Can I change things without editing code?</summary><p>Every setting is on these pages and in <code>config.json</code> (App &amp; network → Edit config.json). Presets, colours, the name and the sign-in message can all be changed there, and <code>custom.css</code> restyles anything.</p></details>
+      </div>`)}`;
+  }
+
+  // ------------------------------------------------------------ actions
+  $('#main').addEventListener('click', async e => {
+    const go = e.target.closest('[data-page-go]');
+    if (go) { page = go.dataset.pageGo; renderNav(); render(); $('#main').scrollTop = 0; return; }
+    const m = e.target.closest('[data-method]');
+    if (m) {
+      const id = m.dataset.method;
+      const map = { cloudflare: 'cloudflare', custom: 'custom', domain: 'cloudflare-domain' };
+      if (map[id]) { if (ST.config.network.tunnel !== map[id]) beam.tunnelStop(); await save({ 'network.tunnel': map[id] }, true); }
+      else { remoteGuide = id; localStorage.setItem('remoteGuide', id); if (ST.config.network.tunnel !== 'none') { beam.tunnelStop(); await save({ 'network.tunnel': 'none' }, true); } }
+      render();
+      return;
+    }
+    const pr = e.target.closest('[data-preset]');
+    if (pr) {
+      const p = ST.config.presets[+pr.dataset.preset];
+      await save({ 'stream.resolution': p.resolution, 'stream.fps': p.fps, 'stream.bitrateKbps': p.bitrateKbps });
+      render();
+      return;
+    }
+    const b = e.target.closest('[data-action]');
+    if (!b) return;
+    const act = b.dataset.action;
+    const url = b.dataset.url;
+    if (b.tagName === 'A') e.preventDefault();
+    switch (act) {
+      case 'copy': await beam.copy(url); toast('Link copied', 'ok'); break;
+      case 'copy-code': await beam.copy(url); toast('Code copied', 'ok'); break;
+      case 'embed-test': beam.embedTest(url); break;
+      case 'update-check': await beam.updateCheck(); break;
+      case 'update-download': beam.updateDownload(); break;
+      case 'update-install':
+        if (!STATUS.clients.length || confirm('Restart now to install the update? Connected devices drop for a moment and reconnect by themselves.')) beam.updateInstall();
+        break;
+      case 'firewall-check': await beam.firewallCheck(); break;
+      case 'firewall-fix': {
+        toast('Approve the Windows prompt to allow the app.');
+        const fw = await beam.firewallFix();
+        if (fw && fw.state === 'ok') toast('Devices on your network can connect now.', 'ok');
+        else toast('The firewall rule wasn\'t added.', 'error');
+        break;
+      }
+      case 'open': beam.openExternal(url); break;
+      case 'open-local': beam.testInBrowser(); break;
+      case 'qr': showQr(url); break;
+      case 'wizard': openWizard(); break;
+      case 'kick': beam.kick(b.dataset.id); break;
+      case 'kick-all': for (const c of STATUS.clients) beam.kick(c.id); break;
+      case 'tunnel-start': beam.tunnelStart(); break;
+      case 'domain-setup': case 'domain-overwrite': case 'domain-relogin': {
+        const host = ($('#domain-host') || {}).value || (ST.domain && ST.domain.hostname) || '';
+        domainStep = { step: 'tool', message: 'Starting…' };
+        const box = $('#domain-box'); if (box) box.innerHTML = domainStepHtml();
+        const r = await beam.domainSetup({ hostname: host, overwrite: act === 'domain-overwrite', forceLogin: act === 'domain-relogin' });
+        if (!r.ok && r.error && (!domainStep || domainStep.step !== 'error')) { domainStep = { step: 'error', message: r.error }; const bx = $('#domain-box'); if (bx) bx.innerHTML = domainStepHtml(); }
+        break;
+      }
+      case 'domain-cancel': domainStep = null; { const bx = $('#domain-box'); if (bx) bx.innerHTML = ''; } break;
+      case 'domain-token': {
+        const r = await beam.domainToken({ token: ($('#domain-token') || {}).value, hostname: ($('#domain-host') || {}).value });
+        if (r.ok) toast('Token saved. Starting your tunnel…', 'ok'); else toast(r.error, 'error');
+        break;
+      }
+      case 'domain-forget':
+        if (confirm('Disconnect this domain from the app? The tunnel and DNS record stay in your Cloudflare account, so you can delete them there or reconnect later.')) { await beam.domainForget(); domainStep = null; toast('Domain disconnected'); }
+        break;
+      case 'tunnel-stop': beam.tunnelStop(); break;
+      case 'tunnel-log': showLog('Tunnel log', await beam.tunnelLog()); break;
+      case 'cap-log': showLog('Streamer log', await beam.capLog()); break;
+      case 'save-json': {
+        const key = b.dataset.for;
+        const ta = document.querySelector(`textarea[data-key="${key}"]`);
+        let v;
+        try { v = JSON.parse(ta.value); } catch (err) { toast(`That isn't valid JSON: ${err.message}`, 'error'); return; }
+        await save({ [key]: v });
+        break;
+      }
+      case 'set-password': {
+        const a = $('#pw-new').value, c = $('#pw-confirm').value;
+        if (a !== c) { toast('The two passwords are different.', 'error'); return; }
+        const r = await beam.setPassword(a);
+        if (r.ok) { toast('Password saved', 'ok'); $('#pw-new').value = ''; $('#pw-confirm').value = ''; } else toast(r.error, 'error');
+        break;
+      }
+      case 'totp-on': totpWizard(); break;
+      case 'totp-off': if (confirm('Turn off two-step sign-in?')) { await beam.totpDisable(); toast('Two-step sign-in is off'); } break;
+      case 'signout-all': if (confirm('Sign out every device? They will need the password again.')) { await beam.signOutAll(); toast('All devices signed out', 'ok'); } break;
+      case 'open-path': beam.openPath(b.dataset.which); break;
+      case 'export': if (await beam.exportConfig()) toast('Settings exported', 'ok'); break;
+      case 'import': {
+        const r = await beam.importConfig();
+        if (r.ok) toast(r.problems && r.problems.length ? `Imported with ${r.problems.length} value(s) reset to default.` : 'Settings imported', 'ok');
+        else if (r.error) toast(r.error, 'error');
+        break;
+      }
+      case 'reset-all': if (confirm('Reset every setting to the default? Your password stays.')) { await beam.resetConfig(); toast('Settings reset', 'ok'); } break;
+      case 'restart-admin': beam.restartAdmin(); break;
+      case 'appearance-reset': {
+        const d = ST.defaults.appearance;
+        await save(Object.fromEntries(Object.entries(d).map(([k, v]) => [`appearance.${k}`, v])));
+        render();
+        break;
+      }
+      case 'preset-add': {
+        const rows = readPresetRows();
+        rows.push({ name: 'My preset', resolution: '1080p', fps: 60, bitrateKbps: 15000 });
+        $('#preset-rows').innerHTML = rows.map(presetRow).join('');
+        break;
+      }
+      case 'preset-del': b.closest('tr').remove(); break;
+      case 'preset-save': {
+        const rows = readPresetRows();
+        if (!rows.length) { toast('Keep at least one preset.', 'error'); return; }
+        await save({ presets: rows });
+        render();
+        break;
+      }
+      case 'preset-reset': await save({ presets: ST.defaults.presets }); render(); break;
+      default: break;
+    }
+  });
+
+  // ------------------------------------------------------------ modals
+  function modal(html, onClick) {
+    const m = $('#modal');
+    m.innerHTML = `<div class="modal-card">${html}</div>`;
+    m.hidden = false;
+    m.onclick = e => {
+      if ((e.target === m && !m.dataset.locked) || e.target.closest('[data-close]')) { closeModal(); return; }
+      if (onClick) onClick(e);
+    };
+  }
+  function closeModal() {
+    const m = $('#modal');
+    m.hidden = true; m.innerHTML = ''; m.onclick = null; m.dataset.locked = '';
+    renderNav();
+    if (!editing()) render();
+  }
+  addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden && !$('#modal').dataset.locked) closeModal(); });
+
+  async function showQr(url) {
+    const img = await beam.qr(url);
+    modal(`<h2>Open on your phone</h2><p>Point your phone's camera at the code, then tap the link it finds.</p>
+      <img class="qr" src="${img}" alt="QR code"><p class="mono faint" style="text-align:center;word-break:break-all;margin:0">${esc(url)}</p>
+      <div class="foot"><button class="btn" data-copy="1">${icon('copy')}Copy link</button><button class="btn primary" data-close="1">Done</button></div>`,
+    e => { if (e.target.closest('[data-copy]')) { beam.copy(url); toast('Link copied', 'ok'); } });
+  }
+
+  function showLog(title, lines) {
+    modal(`<h2>${esc(title)}</h2><p>The most recent lines.</p><pre class="term">${esc((lines || []).join('\n') || 'Nothing yet.')}</pre><div class="foot"><button class="btn primary" data-close="1">Close</button></div>`);
+  }
+
+  async function totpWizard() {
+    const t = await beam.totpStart();
+    modal(`<h2>Turn on two-step sign-in</h2>
+      <p>Scan this code with your authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…).</p>
+      <img class="qr" src="${t.qr}" alt="QR code">
+      <p style="text-align:center;margin:0 0 18px" class="muted">Can't scan? Enter this key: <code style="user-select:all">${esc(t.secret.replace(/(.{4})/g, '$1 ').trim())}</code></p>
+      <label class="muted" style="display:block;margin-bottom:6px">Then type the 6-digit code it shows</label>
+      <input class="input mono" id="totp-code" inputmode="numeric" maxlength="6" placeholder="000000" style="font-size:18px;letter-spacing:.35em;text-align:center;height:40px">
+      <div class="foot"><button class="btn" data-close="1">Cancel</button><button class="btn primary" data-totp-ok="1">Turn on</button></div>`,
+    async e => {
+      if (!e.target.closest('[data-totp-ok]')) return;
+      const ok = await beam.totpConfirm($('#totp-code').value.trim());
+      if (ok) { closeModal(); toast('Two-step sign-in is on', 'ok'); } else toast('That code didn\'t match. Check the time on your phone and try the newest code.', 'error');
+    });
+    setTimeout(() => { const i = $('#totp-code'); if (i) i.focus(); }, 50);
+  }
+
+  // First-run wizard: password, quality, remote access, done.
+  async function openWizard() {
+    const w = { step: 0, preset: 1, remote: 'cloudflare', auto: true };
+    const steps = 4;
+    const opt = (attr, id, active, title, desc) => `<button class="option ${active ? 'active' : ''}" ${attr}="${id}"><span class="radio"></span><div><b>${title}</b><span>${desc}</span></div></button>`;
+    const draw = async () => {
+      const head = `<div class="wizard-progress">${Array.from({ length: steps }, (_, i) => `<i class="${i <= w.step ? 'on' : ''}"></i>`).join('')}</div><div class="wizard-step">Step ${w.step + 1} of ${steps}</div>`;
+      let html = '';
+      if (w.step === 0) {
+        html = `${head}<h2>Set up ${esc(ST.config.appearance.appName)}</h2>
+          <p>Stream this PC to any web browser, at home or away, and control it with a mouse, keyboard or touch screen. First, choose a password. Only people who know it can connect.</p>
+          ${ST.auth.passwordSet ? `<div style="margin:-4px 0 14px">${note('info', 'A password is already set. Leave these empty to keep it.')}</div>` : ''}
+          <input class="input" type="password" id="wz-pw" placeholder="Password, at least 8 characters" autocomplete="new-password">
+          <input class="input" type="password" id="wz-pw2" placeholder="Type it again" autocomplete="new-password">
+          <div class="strength" id="wz-strength"><i></i></div>
+          <div class="foot">${ST.auth.passwordSet ? '<button class="btn" data-close="1">Close</button>' : ''}<button class="btn primary" data-next="1">Continue</button></div>`;
+      } else if (w.step === 1) {
+        html = `${head}<h2>Starting quality</h2><p>You can change it any time, including from the browser while streaming.</p>
+          ${ST.config.presets.map((p, i) => opt('data-pick', i, w.preset === i, esc(p.name), `${p.resolution === 'native' ? 'Native resolution' : p.resolution} · ${p.fps} fps · up to ${mbps(p.bitrateKbps)} Mbps`)).join('')}
+          <div class="foot"><button class="btn" data-back="1">Back</button><button class="btn primary" data-next="1">Continue</button></div>`;
+      } else if (w.step === 2) {
+        html = `${head}<h2>Connect from outside your home?</h2><p>Devices on your home network can already reach this PC.</p>
+          ${opt('data-remote', 'cloudflare', w.remote === 'cloudflare', 'Yes, with a quick link', 'A free Cloudflare tunnel. No router changes or account needed.')}
+          ${opt('data-remote', 'tailscale', w.remote === 'tailscale', 'Yes, with Tailscale', 'A private network for your own devices. Steps are on the Remote access page.')}
+          ${opt('data-remote', 'none', w.remote === 'none', 'Not now', 'Only at home for now. You can turn it on later.')}
+          ${w.remote === 'cloudflare' ? `<label class="option" style="cursor:pointer"><input type="checkbox" id="wz-auto" ${w.auto ? 'checked' : ''}><div><b>Start it whenever the app opens</b><span>Keeps the PC reachable.</span></div></label>` : ''}
+          <div class="foot"><button class="btn" data-back="1">Back</button><button class="btn primary" data-next="1">Continue</button></div>`;
+      } else {
+        const lan = STATUS.urls.find(u => u.kind === 'lan');
+        const img = lan ? await beam.qr(lan.url) : null;
+        html = `${head}<h2>Ready</h2>
+          <p>Try it in this PC's browser now, or scan the code to open it on your phone at home.${w.remote === 'cloudflare' ? ' Your link for anywhere else appears on Home in a few seconds.' : ''}</p>
+          ${img ? `<img class="qr" src="${img}" alt="QR code"><p class="mono faint" style="text-align:center;margin:0">${esc(lan.url)}</p>` : ''}
+          <div class="foot"><button class="btn" data-local="1">${icon('external')}Open in browser</button><button class="btn primary" data-close="1">Done</button></div>`;
+      }
+      modal(html, onClick);
+      $('#modal').dataset.locked = ST.auth.passwordSet ? '' : '1';
+      if (w.step === 0) setTimeout(() => $('#wz-pw') && $('#wz-pw').focus(), 50);
+    };
+    const onClick = async e => {
+      const t = e.target;
+      if (t.closest('[data-pick]')) { w.preset = +t.closest('[data-pick]').dataset.pick; return draw(); }
+      if (t.closest('[data-remote]')) { w.remote = t.closest('[data-remote]').dataset.remote; return draw(); }
+      if (t.id === 'wz-auto') { w.auto = t.checked; return; }
+      if (t.closest('[data-back]')) { w.step--; return draw(); }
+      if (t.closest('[data-local]')) { beam.testInBrowser(); return; }
+      if (!t.closest('[data-next]')) return;
+      if (w.step === 0) {
+        const a = $('#wz-pw').value, b = $('#wz-pw2').value;
+        if (a || b || !ST.auth.passwordSet) {
+          if (a !== b) return toast('The two passwords are different.', 'error');
+          const r = await beam.setPassword(a);
+          if (!r.ok) return toast(r.error, 'error');
+          ST.auth.passwordSet = true;
+        }
+      } else if (w.step === 1) {
+        const p = ST.config.presets[w.preset];
+        await save({ 'stream.resolution': p.resolution, 'stream.fps': p.fps, 'stream.bitrateKbps': p.bitrateKbps }, true);
+      } else if (w.step === 2) {
+        if (w.remote === 'cloudflare') {
+          await save({ 'network.tunnel': 'cloudflare', 'network.tunnelAutoStart': w.auto }, true);
+          beam.tunnelStart();
+        } else {
+          remoteGuide = w.remote === 'tailscale' ? 'tailscale' : remoteGuide;
+          localStorage.setItem('remoteGuide', remoteGuide);
+          await save({ 'network.tunnel': 'none', 'network.tunnelAutoStart': false }, true);
+        }
+      }
+      w.step++;
+      draw();
+    };
+    draw();
+  }
+  $('#modal').addEventListener('input', e => { if (e.target.id === 'wz-pw') strength(e.target.value, '#wz-strength'); });
+
+  init();
+})();

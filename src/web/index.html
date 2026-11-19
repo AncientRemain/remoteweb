@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-bg="aurora">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#0e0f11">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <title>Beam Remote</title>
+  <link rel="stylesheet" href="client.css">
+  <link rel="stylesheet" href="custom.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <!-- Sign in -->
+  <main id="login" class="screen" hidden>
+    <div class="login-wrap">
+      <form class="login-card" id="login-form" autocomplete="on">
+        <img src="icon.png" class="logo" alt="">
+        <h1 id="app-name">Beam Remote</h1>
+        <p id="welcome" class="muted">Sign in to connect to this PC.</p>
+        <div id="not-setup" class="notice" hidden>
+          This PC hasn't been set up yet. Open the app on the PC, choose a password, then refresh this page.
+        </div>
+        <div id="login-fields">
+          <input type="text" name="username" autocomplete="username" value="pc" hidden>
+          <label class="field">
+            <span>Password</span>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+          </label>
+          <label class="field" id="totp-field" hidden>
+            <span>Authenticator code</span>
+            <input id="totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 digits">
+          </label>
+          <label class="check"><input type="checkbox" id="remember" checked><span>Keep me signed in on this device</span></label>
+          <button class="btn primary big" id="login-btn" type="submit">Connect</button>
+          <p class="error" id="login-error" role="alert"></p>
+        </div>
+      </form>
+      <p class="fine" id="insecure-note" hidden>This address doesn't use https, so the password is sent unencrypted. That's fine at home; from elsewhere, use your tunnel, domain or Tailscale link.</p>
+    </div>
+  </main>
+
+  <!-- Stream -->
+  <main id="stream" class="screen" hidden>
+    <div id="stage">
+      <video id="video" playsinline autoplay muted disablepictureinpicture></video>
+      <canvas id="canvas" hidden></canvas>
+    </div>
+    <div id="cursor" hidden></div>
+    <div id="stats" class="hud" hidden></div>
+    <div id="edge" aria-hidden="true"></div>
+    <nav id="toolbar" class="surface" aria-label="Stream controls"></nav>
+    <div id="pop" class="surface popover" hidden></div>
+    <aside id="panel" class="surface" aria-label="Settings" hidden></aside>
+    <div id="overlay" class="overlay">
+      <div class="overlay-card">
+        <div class="spinner" id="ov-spin"></div>
+        <h2 id="ov-title">Connecting…</h2>
+        <p id="ov-text" class="muted"></p>
+        <div id="ov-actions" class="row center"></div>
+      </div>
+    </div>
+    <div id="netnote" class="surface" role="status" hidden><i class="spinner"></i><span>Reconnecting…</span></div>
+    <button id="unmute" class="surface pill-btn" hidden>Turn sound on</button>
+    <div id="lock-hint" class="surface pill-btn" hidden>Mouse locked. Press Esc to release.</div>
+    <textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Keyboard input"></textarea>
+  </main>
+
+  <div id="toasts" aria-live="polite"></div>
+  <script src="client.js"></script>
+</body>
+</html>

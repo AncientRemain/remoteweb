@@ -1,0 +1,72 @@
+{
+  "name": "beam-remote",
+  "productName": "Beam Remote",
+  "version": "1.3.0",
+  "description": "Stream and control your whole PC from any web browser, at home or away.",
+  "main": "src/main/main.js",
+  "author": "Beam Remote",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icon.js",
+    "build:audio": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /optimize /target:exe /out:assets\\beam-audio.exe tools\\beam-audio\\Program.cs",
+    "test": "node --test test/core.test.js test/cloudflare.test.js test/audio.test.js test/server.test.js",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win --dir",
+    "release": "node scripts/release.js"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "koffi": "^3.3.8",
+    "qrcode": "^1.5.4",
+    "selfsigned": "^5.5.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "electron": "45.3.4",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.beamremote.desktop",
+    "productName": "Beam Remote",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**/*",
+      "node_modules/@koromix/**/*",
+      "assets/beam-audio.exe"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Beam Remote",
+      "runAfterFinish": true,
+      "artifactName": "Beam-Remote-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AncientRemain",
+        "repo": "remoteweb",
+        "releaseType": "release"
+      }
+    ]
+  }
+}

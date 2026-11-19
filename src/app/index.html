@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <title>Beam Remote</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="titlebar">
+    <img src="../../assets/icon.png" alt="">
+    <span id="tb-name">Beam Remote</span>
+    <span class="tb-status" id="tb-status"></span>
+  </header>
+  <div class="shell">
+    <nav class="side" id="nav" aria-label="Sections"></nav>
+    <main class="main" id="main"></main>
+  </div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
