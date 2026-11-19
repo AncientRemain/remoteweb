@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.4.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.5.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -110,7 +110,11 @@ Use an `https://` address (your own domain or a quick link): https websites can'
 | Works through tunnels | Usually: it connects directly even when you opened a tunnel link | Always |
 | Needs | Any modern browser | An https link (tunnel/HTTPS) or this PC |
 
-**Auto** (the default) tries WebRTC first and switches to WebSocket after about 6 seconds if no direct path is found. Video uses the graphics card's H.264 encoder when it can (NVIDIA, AMD and Intel all have one). Many graphics cards only hardware-encode up to 1080p, so above that the processor does the work.
+**Auto** (the default) tries WebRTC first and switches to WebSocket if no direct path is found. On networks that block direct connections (many schools and workplaces) the page notices within about 2.5 seconds and remembers it for that network for 12 hours, so the next connection starts on the web stream straight away.
+
+Video is encoded on the graphics card. The codec is **Automatic** by default: **HEVC (H.265)** when the viewing device can decode it in hardware (Chrome and Edge on most PCs and Chromebooks, Safari), which gives the same picture with noticeably less data, and **H.264** everywhere else. Over WebRTC the graphics card handles full resolution. In WebSocket mode the browser's encoder only uses the graphics card up to 1080p, so a bigger screen is sent at 1080p instead of being encoded on the processor. In WebSocket mode a keyframe is sent only when the stream needs one (plus every 30 seconds at most), which avoids bursts of data through tunnels.
+
+Chromium's screen capture tops out at about 50–60 frames per second on most PCs, so settings above 60 fps rarely help.
 
 **Connections that hold up**
 - If the page's connection drops (Wi-Fi hiccup, phone switching networks, tunnel blip), it reconnects within a second and picks up the same session. A WebRTC picture keeps playing meanwhile; a WebSocket stream continues at the next keyframe.
@@ -120,7 +124,7 @@ Use an `https://` address (your own domain or a quick link): https websites can'
 - **App & network → Diagnostics** checks that Windows Firewall lets devices on your network in, with a one-click fix.
 
 **Built for speed**
-- **Stream priority.** While someone is connected, the streaming processes run at above-normal priority (App & network → Stream priority), so a heavy game can't make the stream stutter.
+- **Stream priority.** While someone is connected, the streaming processes get more CPU time, are never put in Windows' Efficiency mode or timer throttling, and get priority on the graphics card (App & network → Stream priority), so a heavy game can't make the stream stutter.
 - **No throttling.** The hidden capture window is never slowed down as a "background" page.
 - **Faster mouse.** Mouse movement is sent as soon as it happens (raw pointer updates on https pages), not once per screen refresh.
 - **Small sound buffer.** Sound is buffered as little as possible (12–45 ms in Lowest latency mode).

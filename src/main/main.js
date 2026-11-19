@@ -35,6 +35,7 @@ const { SystemAudio } = require('./audio');
 const cloudflare = require('./cloudflare');
 const { Updater } = require('./updater');
 const { PrivacyScreen, LABELS: COVER_LABELS } = require('./cover');
+const boost = require('./boost');
 const QRCode = require('qrcode');
 
 const APP_DIR = path.join(__dirname, '..', '..');
@@ -407,6 +408,7 @@ function welcomeFor(c) {
     ice: config.get('network.iceServers'),
     control: config.get('security.allowControl') && input.available(),
     device: c.device,
+    ip: c.ip, // lets the page remember per network whether direct connections work
     version: VERSION,
     schema: clientSchema(),
     secureTunnel: c.tunnel,
@@ -470,7 +472,7 @@ function wireServer() {
     hostStats.delete(c.id);
     setLatency(c.latency);
     if (m.transport === 'websocket') {
-      const codecs = Array.isArray(m.codecs) ? m.codecs.filter(x => ['H264', 'VP9', 'AV1', 'VP8'].includes(x)) : [];
+      const codecs = Array.isArray(m.codecs) ? m.codecs.filter(x => ['H264', 'H265', 'VP9', 'AV1', 'VP8'].includes(x)) : [];
       capSend('cap:start-ws', { id: c.id, codecs, latency: c.latency });
       if (lastAudioConfig) server.send(c.id, { t: 'audioconfig', ...lastAudioConfig });
     } else {
@@ -478,6 +480,8 @@ function wireServer() {
     }
     updateAudio();
     cover.update();
+    // Some helper processes (e.g. Chromium's audio service) only start once streaming does.
+    setTimeout(updatePriority, 4000);
   });
 
   // The streaming device picks what this PC's monitor shows (for this session only).
@@ -681,12 +685,19 @@ function updatePriority() {
   if (want === boosted && !want) return;
   boosted = want;
   const pids = new Set([process.pid]);
+  const gpuPids = [process.pid]; // screen capture runs in this process; encoding in the GPU process
   try {
-    for (const m of app.getAppMetrics()) if (m.type === 'GPU' || m.type === 'Utility') pids.add(m.pid);
+    for (const m of app.getAppMetrics()) {
+      if (m.type === 'GPU' || m.type === 'Utility') pids.add(m.pid);
+      if (m.type === 'GPU') gpuPids.push(m.pid);
+    }
     if (capWin && !capWin.isDestroyed()) pids.add(capWin.webContents.getOSProcessId());
     if (sysAudio && sysAudio.proc && sysAudio.proc.pid) pids.add(sysAudio.proc.pid);
   } catch { /* ignore */ }
   for (const pid of pids) { try { os.setPriority(pid, level); } catch { /* ignore */ } }
+  // No power/timer throttling, and priority on the graphics card, while someone watches.
+  const r = boost.apply({ pids: [...pids], gpuPids }, want);
+  dbg('boost', want ? 'on' : 'off', JSON.stringify(r));
 }
 
 function duration(ms) {

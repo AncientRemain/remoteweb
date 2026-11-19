@@ -15,15 +15,28 @@ const latencyOf = new Map(); // client id -> 'lowest' | 'balanced' | 'smooth'
 const PLAYOUT_DELAY = 'http://www.webrtc.org/experiments/rtp-hdrext/playout-delay';
 
 const log = (...a) => { console.log('[capture]', ...a); host.send('cap:log', a.map(String).join(' ')); };
+// Codec order. Automatic: HEVC when the viewer can play it (browsers only offer it with a
+// hardware decoder), which needs less data for the same picture; otherwise H.264.
+const codecPrefs = () => (!settings.codec || settings.codec === 'auto' ? ['H265', 'H264', 'VP9', 'VP8', 'AV1'] : [settings.codec, 'H264', 'H265', 'VP9', 'VP8', 'AV1'])
+  .filter((v, i, a) => a.indexOf(v) === i);
 const maxHeight = r => (r === 'native' ? 0 : parseInt(r, 10) || 0);
 const now = () => performance.timeOrigin + performance.now();
 
 // ---------------------------------------------------------------- capture
 function videoConstraints() {
   const v = { frameRate: { ideal: settings.fps, max: settings.fps } };
-  const h = maxHeight(settings.resolution);
-  if (h) { v.height = { max: h }; v.width = { max: h * 4 }; }
+  // wsv.capHeight: the WebSocket encoder's graphics-card limit (see pickEncoder).
+  const h = Math.min(maxHeight(settings.resolution) || Infinity, (typeof wsv !== 'undefined' && wsv.capHeight) || Infinity);
+  if (Number.isFinite(h)) { v.height = { max: h }; v.width = { max: h * 4 }; }
   return v;
+}
+
+async function reapplySize() {
+  const vt = media && media.getVideoTracks()[0];
+  if (!vt) return;
+  const c = videoConstraints();
+  if (!c.height) { c.width = { max: 16384 }; c.height = { max: 16384 }; }
+  try { await vt.applyConstraints(c); } catch (e) { log('applyConstraints failed:', e.message); }
 }
 
 async function getMedia() {
@@ -239,7 +252,7 @@ function preferCodec(sdp) {
     m = l.match(/^a=fmtp:(\d+) (.*)$/);
     if (m) fmtp[m[1]] = m[2];
   }
-  const order = [settings.codec, 'H264', 'VP9', 'VP8', 'AV1'].filter((v, i, a) => a.indexOf(v) === i);
+  const order = codecPrefs();
   const rank = pt => {
     const n = name[pt] || '';
     if (/RTX|RED|ULPFEC|FLEXFEC/.test(n)) return 1000;
@@ -253,6 +266,7 @@ function preferCodec(sdp) {
       if (/profile-level-id=42e0/i.test(f)) r -= 0.5;
       if (!/packetization-mode=1/.test(f)) r += 5;
     }
+    if (n === 'H265' && !/profile-id=1(;|$)/.test(fmtp[pt] || '')) r += 1; // Main before Main 10
     return r;
   };
   return lines.map(l => {
@@ -265,8 +279,8 @@ function preferCodec(sdp) {
 
 function codecOrder() {
   const caps = RTCRtpSender.getCapabilities('video')?.codecs || [];
-  const want = { H264: 'video/H264', VP9: 'video/VP9', AV1: 'video/AV1', VP8: 'video/VP8' };
-  const order = [settings.codec, 'H264', 'VP9', 'VP8', 'AV1'].map(k => want[k]).filter((v, i, a) => v && a.indexOf(v) === i);
+  const want = { H264: 'video/H264', H265: 'video/H265', VP9: 'video/VP9', AV1: 'video/AV1', VP8: 'video/VP8' };
+  const order = codecPrefs().map(k => want[k]).filter((v, i, a) => v && a.indexOf(v) === i);
   const rank = c => {
     const i = order.indexOf(c.mimeType);
     let r = i < 0 ? 50 : i * 10;
@@ -415,12 +429,13 @@ async function peerStats(peer) {
 // ---------------------------------------------------------------- WebSocket (WebCodecs)
 const CODEC_STRINGS = {
   H264: ['avc1.640034', 'avc1.4d0034', 'avc1.42e034', 'avc1.640033', 'avc1.42e01f'],
+  H265: ['hvc1.1.6.L123.B0', 'hvc1.1.6.L153.B0'],
   VP9: ['vp09.00.51.08', 'vp09.00.41.08'],
   AV1: ['av01.0.13M.08', 'av01.0.12M.08', 'av01.0.08M.08'],
   VP8: ['vp8'],
 };
 const wsv = {
-  encoder: null, key: null, width: 0, height: 0, codec: null, codecString: null, configuring: null,
+  encoder: null, key: null, width: 0, height: 0, codec: null, codecString: null, configuring: null, capHeight: 0,
   needKey: true, lastKeyAt: 0, lastFrameAt: 0, readers: [], scale: 1, inTimes: new Map(),
   frames: 0, bytes: 0, encodeSum: 0, encodeN: 0, dropped: 0,
 };
@@ -434,31 +449,46 @@ function encoderConfig(codecString, w, h, hw) {
     hardwareAcceleration: hw, contentHint: settings.contentHint,
   };
   if (codecString.startsWith('avc1')) c.avc = { format: 'annexb' };
+  if (codecString.startsWith('hvc1')) c.hevc = { format: 'annexb' };
   return c;
 }
 
+// Graphics card first. Its encoders here stop at 1080p in this mode, so for a bigger screen
+// the picture is captured at 1080p instead of falling back to the much slower processor.
 async function pickEncoder(w, h) {
   const accepted = new Set();
   for (const list of wsClients.values()) for (const k of list) accepted.add(k);
-  const order = [settings.codec, 'H264', 'VP9', 'VP8', 'AV1'].filter((v, i, a) => a.indexOf(v) === i && (accepted.size === 0 || accepted.has(v)));
-  const hwOrder = [settings.hardwareEncoding, 'no-preference'].filter((v, i, a) => a.indexOf(v) === i);
-  for (const codec of order) {
-    for (const s of CODEC_STRINGS[codec] || []) {
-      for (const hw of hwOrder) {
-        const cfg = encoderConfig(s, w, h, hw);
-        try {
-          const r = await VideoEncoder.isConfigSupported(cfg);
-          if (r.supported) return { codec, config: cfg };
-        } catch { /* try next */ }
+  const order = codecPrefs().filter(v => accepted.size === 0 || accepted.has(v));
+  const first = async (W, H, hw) => {
+    for (const codec of order) {
+      for (const s of CODEC_STRINGS[codec] || []) {
+        const cfg = encoderConfig(s, W, H, hw);
+        try { if ((await VideoEncoder.isConfigSupported(cfg)).supported) return { codec, config: cfg }; } catch { /* try next */ }
       }
     }
+    return null;
+  };
+  if (settings.hardwareEncoding !== 'prefer-software') {
+    const pick = await first(w, h, 'prefer-hardware');
+    if (pick) return pick;
+    if (h > 1080) {
+      const H = 1080, W = Math.round((w * H) / h / 2) * 2;
+      const small = await first(W, H, 'prefer-hardware');
+      if (small) return { ...small, shrinkTo: H };
+    }
   }
-  return null;
+  return first(w, h, settings.hardwareEncoding === 'prefer-software' ? 'prefer-software' : 'no-preference');
 }
 
 async function configureEncoder(w, h) {
   const pick = await pickEncoder(w, h);
   if (!pick) { host.send('cap:error', { code: 'encoder', message: 'No video encoder on this PC can make a stream your browser can play. Try WebRTC mode.' }); return false; }
+  if (pick.shrinkTo && wsv.capHeight !== pick.shrinkTo) {
+    wsv.capHeight = pick.shrinkTo;
+    log(`WebSocket: no graphics-card encoder at ${w}x${h}; capturing at ${pick.shrinkTo}p instead of using the processor`);
+    reapplySize();
+    return false; // set up again when the smaller frames arrive
+  }
   if (!wsv.encoder || wsv.encoder.state === 'closed') {
     wsv.encoder = new VideoEncoder({ output: onEncoded, error: e => { log('encoder error', e.message); wsv.encoder = null; wsv.key = null; wsv.needKey = true; } });
   }
@@ -490,6 +520,7 @@ async function onFrame(frame) {
     if (capture - wsv.lastFrameAt < (1000 / settings.fps) * 0.7) return; // keep to the chosen fps
     const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
     if (w < 16 || h < 16) return;
+    if (wsv.capHeight && h > wsv.capHeight + 8) return; // still the old size; the smaller frames are on their way
     const wantKey = `${w}x${h}`;
     if (!wsv.encoder || wsv.encoder.state !== 'configured' || wsv.width !== w || wsv.height !== h || wsv.dirty) {
       if (wsv.configuring) return;
@@ -573,6 +604,7 @@ async function startWs(id, codecs) {
 function stopWsClient(id) {
   if (!wsClients.delete(id)) return;
   if (!wsClients.size) {
+    if (wsv.capHeight) { wsv.capHeight = 0; reapplySize(); }
     stopWsReaders();
     stopWsAudio();
     try { wsv.encoder?.close(); } catch { /* ignore */ }

@@ -8,7 +8,7 @@ const RESOLUTIONS = ['native', '2160p', '1440p', '1080p', '900p', '720p', '540p'
 const FPS = [10, 15, 24, 30, 45, 60, 75, 90, 120, 144, 165, 240];
 
 const DEFAULTS = {
-  version: 1,
+  version: 2,
   server: {
     port: 8420,
     bindAddress: '0.0.0.0',
@@ -32,12 +32,12 @@ const DEFAULTS = {
     resolution: '1080p',
     fps: 60,
     bitrateKbps: 20000,
-    codec: 'H264',
+    codec: 'auto',
     audio: 'loopback',
     contentHint: 'motion',
     degradation: 'balanced',
     transport: 'auto',
-    keyframeSeconds: 3,
+    keyframeSeconds: 30,
     hardwareEncoding: 'prefer-hardware',
   },
   presets: [
@@ -127,12 +127,12 @@ const SCHEMA = {
   'stream.resolution': { ...enumOf(RESOLUTIONS, ['Native (full)', '4K (2160p)', '1440p', '1080p', '900p', '720p', '540p', '480p', '360p']), label: 'Resolution', help: 'Biggest picture sent. Lower = less data and lower latency on slow connections. Many graphics cards only hardware-encode up to 1080p; above that the processor does the work.' },
   'stream.fps': { type: 'enumInt', values: FPS, label: 'Frames per second', help: 'Above 60 needs a fast connection and a high-refresh monitor on this PC.' },
   'stream.bitrateKbps': { type: 'int', min: 300, max: 150000, step: 100, label: 'Max bitrate (kbps)', help: '1000 kbps = 1 Mbps. 8-20 Mbps looks great at 1080p; use 1-3 Mbps on mobile data.' },
-  'stream.codec': { ...enumOf(['H264', 'VP9', 'AV1', 'VP8'], ['H.264 (fastest, hardware)', 'VP9 (sharper text)', 'AV1 (best quality per bit)', 'VP8 (most compatible)']), label: 'Video codec' },
+  'stream.codec': { ...enumOf(['auto', 'H264', 'H265', 'VP9', 'AV1', 'VP8'], ['Automatic (HEVC when the device can play it, else H.264)', 'H.264 (works everywhere)', 'HEVC / H.265 (same picture with less data)', 'VP9 (sharper text, processor)', 'AV1 (processor, slow)', 'VP8 (most compatible)']), label: 'Video codec', help: 'Automatic picks HEVC when the viewing device can decode it in hardware (Chrome and Edge on most PCs and Chromebooks, Safari), which needs less data for the same picture, and H.264 everywhere else.' },
   'stream.audio': { ...enumOf(['loopback', 'loopbackWithMute', 'off'], ['On', 'On, and mute this PC\'s speakers', 'Off']), label: 'Sound' },
   'stream.contentHint': { ...enumOf(['motion', 'detail', 'text'], ['Smooth motion (games, video)', 'Sharp detail', 'Text (documents, code)']), label: 'Optimise for' },
   'stream.degradation': { ...enumOf(['balanced', 'maintain-framerate', 'maintain-resolution'], ['Balanced', 'Keep frame rate', 'Keep resolution']), label: 'When the connection is slow' },
   'stream.transport': { ...enumOf(['auto', 'webrtc', 'websocket'], ['Auto (best available)', 'WebRTC only (peer-to-peer)', 'WebSocket only (through tunnels)']), label: 'Connection type', help: 'Auto tries a direct peer-to-peer connection first and falls back to streaming through the tunnel.' },
-  'stream.keyframeSeconds': { type: 'int', min: 1, max: 30, label: 'Keyframe every (seconds)', help: 'WebSocket mode only. Lower recovers faster from glitches; higher uses less data.' },
+  'stream.keyframeSeconds': { type: 'int', min: 1, max: 60, label: 'Keyframe at least every (seconds)', help: 'WebSocket mode only. A keyframe is also sent whenever the stream needs one, so a long interval saves data and avoids stutter through tunnels.' },
   'stream.hardwareEncoding': { ...enumOf(['prefer-hardware', 'no-preference', 'prefer-software'], ['Prefer graphics card', 'Automatic', 'Prefer processor']), label: 'Encoder', help: 'WebSocket mode only. WebRTC always picks automatically.' },
 
   'network.tunnel': { ...enumOf(['cloudflare', 'cloudflare-domain', 'custom', 'none'], ['Cloudflare quick tunnel (free, no account)', 'My own domain (Cloudflare)', 'My own command (ngrok...)', 'None (Tailscale / port forwarding)']), label: 'Remote access method' },
@@ -169,7 +169,7 @@ const SCHEMA = {
   'app.startMinimized': { type: 'bool', label: 'Start hidden in the tray' },
   'app.closeToTray': { type: 'bool', label: 'Closing the window keeps it running in the tray' },
   'app.keepAwake': { type: 'bool', label: 'Keep this PC awake while a device is connected' },
-  'app.streamPriority': { ...enumOf(['high', 'normal'], ['High (smooth even while gaming)', 'Normal']), label: 'Stream priority', help: 'High runs the stream above other programs while a device is connected, so a heavy game can\'t make it stutter.' },
+  'app.streamPriority': { ...enumOf(['high', 'normal'], ['High (smooth even while gaming)', 'Normal']), label: 'Stream priority', help: 'High runs the stream above other programs while a device is connected: more CPU time, no Windows power throttling, and priority on the graphics card, so a heavy game can\'t make it stutter.' },
   'privacy.screen': { ...enumOf(['normal', 'black', 'dim', 'message', 'clock', 'picture', 'logo'], ['Normal (show the screen)', 'Black (looks switched off)', 'Dimmed', 'A message', 'A clock', 'A picture', 'Floating logo']), label: "This PC's monitor while streaming", help: "Covers the monitor here so people near the PC can't watch. The stream itself always shows the real screen." },
   'privacy.message': { type: 'text', max: 200, label: 'Message', help: 'Shown with "A message".', placeholder: 'This PC is being used remotely.' },
   'privacy.showDevice': { type: 'bool', label: 'Say who is connected', help: 'Shows the connected device and for how long on the message and clock screens.' },
@@ -238,6 +238,20 @@ function cleanPresets(list) {
 }
 
 // Builds a full, valid config from whatever was in the file. Problems are listed, not thrown.
+// Files from older versions: settings still at an old default move to the new default.
+const CONFIG_VERSION = 2;
+function migrate(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const v = Number(raw.version) || 1;
+  if (v >= CONFIG_VERSION) return false;
+  if (v < 2 && raw.stream && typeof raw.stream === 'object') {
+    if (raw.stream.codec === 'H264') raw.stream.codec = 'auto';            // 1.5: HEVC when the device can play it
+    if (raw.stream.keyframeSeconds === 3) raw.stream.keyframeSeconds = 30; // 1.5: keyframes on demand
+  }
+  raw.version = CONFIG_VERSION;
+  return true;
+}
+
 function normalize(raw) {
   const problems = [];
   const cfg = clone(DEFAULTS);
@@ -280,11 +294,12 @@ class ConfigStore {
       // A typo must never wipe someone's settings: keep their file, run on defaults, say so.
       else this.problems = [`config.json could not be read (${e.message}). Defaults are in use until it is fixed; the file was left as it is.`];
     }
+    const migrated = migrate(raw);
     const { cfg, problems } = normalize(raw);
     if (raw) this.problems = problems;
     this.cfg = cfg;
     this.readOnly = !raw && !missing; // don't overwrite a file we couldn't read
-    if (missing) this.save();
+    if (missing || migrated) this.save();
     return cfg;
   }
 
@@ -359,4 +374,4 @@ function safeJson(s) { try { return JSON.parse(s); } catch { return undefined; }
 // Height limit for a resolution name (0 = native).
 function maxHeight(res) { return res === 'native' ? 0 : parseInt(res, 10) || 0; }
 
-module.exports = { ConfigStore, DEFAULTS, SCHEMA, RESOLUTIONS, FPS, normalize, maxHeight, get, set };
+module.exports = { ConfigStore, DEFAULTS, SCHEMA, RESOLUTIONS, FPS, normalize, maxHeight, get, set, migrate };

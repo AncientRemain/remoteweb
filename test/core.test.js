@@ -145,3 +145,21 @@ test('privacy screen settings: normal by default, junk falls back', () => {
   assert.ok(problems.some(p => p.includes('privacy.screen')));
   assert.strictEqual(normalize({ privacy: { screen: 'clock' } }).cfg.privacy.screen, 'clock');
 });
+
+test('settings from 1.4 and older move to the new defaults; custom choices stay', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ version: 1, stream: { codec: 'H264', keyframeSeconds: 3, fps: 30 } }));
+  const store = new ConfigStore(dir);
+  assert.strictEqual(store.get('stream.codec'), 'auto');
+  assert.strictEqual(store.get('stream.keyframeSeconds'), 30);
+  assert.strictEqual(store.get('stream.fps'), 30, 'other settings untouched');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).version, 2, 'saved as the new version');
+  const dir2 = tmp();
+  fs.writeFileSync(path.join(dir2, 'config.json'), JSON.stringify({ version: 1, stream: { codec: 'VP9', keyframeSeconds: 5 } }));
+  const kept = new ConfigStore(dir2);
+  assert.strictEqual(kept.get('stream.codec'), 'VP9');
+  assert.strictEqual(kept.get('stream.keyframeSeconds'), 5);
+  const dir3 = tmp();
+  fs.writeFileSync(path.join(dir3, 'config.json'), JSON.stringify({ version: 2, stream: { codec: 'H264' } }));
+  assert.strictEqual(new ConfigStore(dir3).get('stream.codec'), 'H264', 'a choice made in 1.5 is left alone');
+});

@@ -434,6 +434,20 @@
     if (!update && prefs.quality && Object.keys(prefs.quality).length) send({ t: 'quality', changes: prefs.quality });
   }
 
+  // ------------------------------------------------------------ strict networks (school, work)
+  // They often block what a direct WebRTC connection needs (UDP). The page notices within a few
+  // seconds and remembers it for that network, so the next connection uses the web stream at once.
+  const lanHost = h => /^(localhost|127.|[?::1]?$|10.|192.168.|172.(1[6-9]|2d|3[01]).|100.(6[4-9]|[7-9]d|1[01]d|12[0-7]).)/.test(h) || /.(local|ts.net)$/i.test(h);
+  const remotePage = () => !lanHost(location.hostname);
+  const rtcKey = () => `beam.rtcFail.${(S.welcome && S.welcome.ip) || 'any'}`;
+  function rtcFailedRecently() {
+    try { const t = Number(localStorage.getItem(rtcKey())); return !!t && Date.now() - t < 12 * 3600e3; } catch { return false; }
+  }
+  function rememberRtc(failed) {
+    if (!remotePage()) return;
+    try { if (failed) localStorage.setItem(rtcKey(), String(Date.now())); else localStorage.removeItem(rtcKey()); } catch { /* storage blocked */ }
+  }
+
   // ------------------------------------------------------------ choosing a connection
   const canWs = () => window.isSecureContext && typeof VideoDecoder === 'function' && typeof EncodedVideoChunk === 'function';
   const canRtc = () => typeof RTCPeerConnection === 'function';
@@ -449,6 +463,8 @@
       if (canWs()) return startWsMode();
       return overlay('This browser is not supported', 'Please use a recent Chrome, Edge, Safari or Firefox.', false);
     }
+    // Direct connections failed on this network recently: go straight to the web stream.
+    if (t === 'auto' && canWs() && remotePage() && rtcFailedRecently()) return startWsMode();
     startWebRTC(t === 'auto' && canWs());
   }
   function restartTransport() {
@@ -458,7 +474,7 @@
   }
 
   function teardownMedia() {
-    clearTimeout(S.fallbackTimer); clearTimeout(S.discTimer); clearTimeout(S.retryTimer);
+    clearTimeout(S.fallbackTimer); clearTimeout(S.discTimer); clearTimeout(S.retryTimer); clearTimeout(S.probeTimer);
     if (S.pc) { try { S.pc.close(); } catch { /* ignore */ } }
     S.pc = null; S.ctl = null; S.mv = null; S.rvfcToken++;
     const v = $('#video');
@@ -476,6 +492,7 @@
     S.gotFrame = true;
     S.firstFrameAt = performance.now();
     S.captureRetries = 0;
+    if (S.transport === 'webrtc') rememberRtc(false); // direct works on this network
     clearTimeout(S.fallbackTimer);
     hideOverlay();
     layout();
@@ -507,10 +524,12 @@
     S.pc = pc;
     const vt = pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
-    // Ask for the PC's chosen codec first (H.264 = graphics-card encoding on most PCs).
+    // Ask for the PC's chosen codec first. Automatic: HEVC (this browser only lists it when it
+    // can decode it in hardware), then H.264, which every browser plays.
     try {
-      const want = { H264: 'video/H264', VP9: 'video/VP9', AV1: 'video/AV1', VP8: 'video/VP8' };
-      const order = [S.stream.codec, 'H264', 'VP9', 'VP8', 'AV1'].map(k => want[k]).filter(Boolean);
+      const want = { H264: 'video/H264', H265: 'video/H265', VP9: 'video/VP9', AV1: 'video/AV1', VP8: 'video/VP8' };
+      const pref = !S.stream.codec || S.stream.codec === 'auto' ? ['H265', 'H264'] : [S.stream.codec, 'H264', 'H265'];
+      const order = [...pref, 'VP9', 'VP8', 'AV1'].map(k => want[k]).filter((v, i, a) => v && a.indexOf(v) === i);
       const caps = (RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video') || {}).codecs || [];
       const rank = c => { const i = order.indexOf(c.mimeType); return /rtx|red|fec/i.test(c.mimeType) ? 99 : i < 0 ? 50 : i; };
       if (caps.length && vt.setCodecPreferences) vt.setCodecPreferences([...caps].sort((a, b) => rank(a) - rank(b)));
@@ -534,7 +553,11 @@
         playSound();
       }
     };
-    pc.onicecandidate = e => send({ t: 'signal', data: { candidate: e.candidate ? e.candidate.toJSON() : null } });
+    const kinds = new Set();
+    pc.onicecandidate = e => {
+      if (e.candidate && e.candidate.type) kinds.add(e.candidate.type);
+      send({ t: 'signal', data: { candidate: e.candidate ? e.candidate.toJSON() : null } });
+    };
     pc.onconnectionstatechange = () => {
       if (S.pc !== pc) return;
       const st = pc.connectionState;
@@ -546,7 +569,7 @@
         return;
       }
       if (st === 'failed') {
-        if (allowFallback) { toast('No direct path to your PC; streaming through the web connection instead.'); startWsMode(); }
+        if (allowFallback) { rememberRtc(true); toast('No direct path to your PC; streaming through the web connection instead.'); startWsMode(); }
         else overlay('Could not connect directly', 'Your PC and this device could not find a direct path. Switch "Connection type" to Auto or WebSocket in settings, or add a TURN server on the PC.', false, [['Retry', restartTransport], ['Use WebSocket', () => { prefs.transport = 'websocket'; savePrefs(); restartTransport(); }]]);
       } else if (st === 'disconnected') {
         S.discTimer = setTimeout(() => { if (S.pc === pc && pc.connectionState !== 'connected') restartTransport(); }, 4000);
@@ -554,8 +577,19 @@
     };
     if (allowFallback) {
       S.fallbackTimer = setTimeout(() => {
-        if (S.pc === pc && !S.gotFrame) { toast('Direct connection is taking too long; switching to the web stream.'); startWsMode(); }
+        if (S.pc === pc && !S.gotFrame) { rememberRtc(true); toast('Direct connection is taking too long; switching to the web stream.'); startWsMode(); }
       }, 6000);
+      // A public address normally turns up within a fraction of a second. None after 2.5 s on a
+      // page opened from outside means the network blocks direct connections: don't wait.
+      if (remotePage()) {
+        S.probeTimer = setTimeout(() => {
+          if (S.pc === pc && !S.gotFrame && pc.connectionState !== 'connected' && !kinds.has('srflx') && !kinds.has('relay')) {
+            rememberRtc(true);
+            toast('This network blocks direct connections; streaming through the web connection instead.');
+            startWsMode();
+          }
+        }, 2500);
+      }
     }
     try {
       await pc.setLocalDescription(await pc.createOffer());
@@ -612,7 +646,7 @@
   }
 
   // ------------------------------------------------------------ WebSocket + WebCodecs
-  const DECODE = { H264: 'avc1.640034', VP9: 'vp09.00.51.08', AV1: 'av01.0.13M.08', VP8: 'vp8' };
+  const DECODE = { H264: 'avc1.640034', H265: 'hvc1.1.6.L123.B0', VP9: 'vp09.00.51.08', AV1: 'av01.0.13M.08', VP8: 'vp8' };
   let decodable = null;
   async function decodableCodecs() {
     if (decodable) return decodable;
@@ -671,6 +705,7 @@
       if (!S.decoder || S.decoder.state === 'closed') { if (S.wsConfig) setupDecoder(); else return; }
       if (S.needKey && !key) return;
       if (!key && S.decoder.decodeQueueSize > 3) { S.needKey = true; S.clientDropped++; send({ t: 'keyframe' }); return; }
+      if (key) S.keyFrames = (S.keyFrames || 0) + 1; // shown in the debug state only
       S.frameMeta.set(seq, { host: ts, recv: performance.now() });
       try {
         S.decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: seq, data: payload }));
