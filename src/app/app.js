@@ -568,12 +568,24 @@
           ? '<div class="statusline"><span class="dot good"></span><span class="label">On</span><span class="msg">A code is required at sign-in.</span><button class="btn small danger" data-action="totp-off">Turn off</button></div>'
           : `<div class="statusline"><span class="dot"></span><span class="label">Off</span><span class="msg">Only the password is needed.</span><button class="btn small primary" data-action="totp-on" ${a.passwordSet ? '' : 'disabled'}>Turn on</button></div>`}</div>`)}
       ${section('Rules', '', fields(['security.allowControl', 'security.maxClients', 'security.newClientPolicy', 'security.sessionDays', 'security.maxFailedAttempts', 'security.lockoutMinutes', 'security.notifyOnSignIn', 'security.blockWinKey', 'security.allowedIps']))}
+      ${section('Privacy screen', 'What this PC\'s own monitor shows while someone is streaming, so people near the PC can\'t watch. The stream always shows the real screen.', privacyHtml())}
       ${section('Embedding', 'Show this page inside your own website with an iframe. Enter your site\'s address, or * to allow any site.', `${fields(['security.embedOrigins'])}<div id="embed-box">${embedHtml()}</div>`)}
       ${section('Signed-in devices', 'Browsers that are currently allowed in.',
         `<div class="card rows log">${a.sessions.length ? a.sessions.slice().reverse().map(s => `<div><time>${new Date(s.created).toLocaleDateString()}</time><span class="msg">${esc(s.device || 'Browser')} · ${esc(s.ip)}</span><span class="faint">until ${new Date(s.expires).toLocaleDateString()}</span></div>`).join('') : '<div class="empty">No devices are signed in.</div>'}</div>`,
         `<button class="btn small danger" data-action="signout-all" ${a.sessions.length ? '' : 'disabled'}>Sign out all</button>`)}
       ${section('Security log', 'Sign-ins, wrong passwords, lockouts and connections.', `<div class="card rows log" id="seclog">${logHtml()}</div>`,
         `<button class="btn ghost small" data-action="open-path" data-which="log">${icon('file')}Open log file</button>`)}`;
+  }
+
+  function privacyHtml() {
+    if (!ST.coverSupported) return note('warn', 'The privacy screen needs Windows 10 version 2004 or newer. On older versions it would cover the stream too.');
+    const pic = ST.config.privacy.picture;
+    const picRow = `<div class="field"><div class="lab"><b>Picture</b><p>Shown with "A picture". It's copied into the settings folder.</p></div>
+      <div class="ctl" style="gap:8px;align-items:center"><span class="faint">${pic ? esc(pic) : 'None chosen'}</span>
+        <button class="btn small" data-action="cover-picture">Choose…</button>${pic ? '<button class="btn small ghost" data-action="cover-picture-clear">Remove</button>' : ''}</div></div>`;
+    return `<div class="card">${['privacy.screen', 'privacy.message', 'privacy.showDevice'].map(k => fieldHtml(k)).join('')}${picRow}${['privacy.screens', 'privacy.browserCanChange'].map(k => fieldHtml(k)).join('')}</div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-action="cover-test">Try it for 6 seconds</button></div>
+      ${note('info', 'Someone at this PC can press <b>Ctrl + Alt + Shift + H</b> to see the screen again until the stream ends. The mouse pointer still shows on the monitor, and games in exclusive full screen can draw over the cover.')}`;
   }
 
   // The address to put in the iframe: the remote one when there is one (https works on any site).
@@ -771,6 +783,19 @@
         if (!STATUS.clients.length || confirm('Restart now to install the update? Connected devices drop for a moment and reconnect by themselves.')) beam.updateInstall();
         break;
       case 'firewall-check': await beam.firewallCheck(); break;
+      case 'cover-picture': {
+        const r = await beam.coverPicture();
+        if (r && r.error) toast(r.error, 'error');
+        else if (r && r.name) { ST.config.privacy.picture = r.name; render(); toast('Picture saved', 'ok'); }
+        break;
+      }
+      case 'cover-picture-clear': await beam.coverClearPicture(); ST.config.privacy.picture = ''; render(); break;
+      case 'cover-test': {
+        const mode = ($('[data-key="privacy.screen"]') || {}).value || ST.config.privacy.screen;
+        if (mode === 'normal') toast('Choose something other than Normal first.');
+        else beam.coverTest(mode);
+        break;
+      }
       case 'firewall-fix': {
         toast('Approve the Windows prompt to allow the app.');
         const fw = await beam.firewallFix();

@@ -135,3 +135,13 @@ test('server helpers: device names and tunnel-aware addresses', () => {
   const spoof = clientIp({ socket: { remoteAddress: '192.168.1.50' }, headers: { 'cf-connecting-ip': '1.1.1.1' } });
   assert.deepStrictEqual(spoof, { ip: '192.168.1.50', tunnel: false });
 });
+
+test('privacy screen settings: normal by default, junk falls back', () => {
+  const { cfg, problems } = normalize({ privacy: { screen: 'rainbow', screens: 'streamed', message: 'Back soon' } });
+  assert.strictEqual(cfg.privacy.screen, 'normal');
+  assert.strictEqual(cfg.privacy.screens, 'streamed');
+  assert.strictEqual(cfg.privacy.message, 'Back soon');
+  assert.strictEqual(cfg.privacy.browserCanChange, true);
+  assert.ok(problems.some(p => p.includes('privacy.screen')));
+  assert.strictEqual(normalize({ privacy: { screen: 'clock' } }).cfg.privacy.screen, 'clock');
+});

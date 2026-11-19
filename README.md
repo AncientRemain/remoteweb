@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.3.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.4.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -73,6 +73,22 @@ Picture and sound are sent as separate streams, so the browser never delays the 
   - **Lowest latency** (default): every frame is shown the moment it arrives, like cloud-gaming services do. Best for games and quick mouse work.
   - **Balanced**: a small buffer that hides stutter on unsteady Wi-Fi.
   - **Smoothest**: a bigger buffer for slow or mobile connections.
+
+## Privacy screen
+
+Choose what this PC's own monitor shows while someone is streaming, so people near the PC can't watch (**Security → Privacy screen**):
+
+- **Normal** (default): the monitor shows what's happening, as usual.
+- **Black**: looks switched off.
+- **Dimmed**: a dark layer; a little of the screen shows through.
+- **A message**: your own text, plus who is connected and for how long.
+- **A clock**: the time and date.
+- **A picture**: any image you choose.
+- **Floating logo**: a slow-moving logo, like a screensaver.
+
+The stream always shows the real screen: the cover is left out of screen capture (needs Windows 10 version 2004 or newer). Clicks and keys still reach the apps underneath. The streaming device can change it from the toolbar (the crossed-out eye) unless you turn that off. Someone at the PC can press **Ctrl + Alt + Shift + H** to see the screen again until the stream ends. **Try it for 6 seconds** shows you what it looks like.
+
+The mouse pointer still shows on the monitor, and games in exclusive full screen can draw over the cover.
 
 ## Embedding it in your own website
 

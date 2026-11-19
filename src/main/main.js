@@ -34,6 +34,7 @@ const input = require('./input');
 const { SystemAudio } = require('./audio');
 const cloudflare = require('./cloudflare');
 const { Updater } = require('./updater');
+const { PrivacyScreen, LABELS: COVER_LABELS } = require('./cover');
 const QRCode = require('qrcode');
 
 const APP_DIR = path.join(__dirname, '..', '..');
@@ -46,7 +47,7 @@ const startHidden = process.argv.includes('--hidden') || justUpdated;
 // BEAM_DEBUG=1 writes step-by-step markers to debug.log in the data folder (always written, even if the app hangs).
 const dbg = (...a) => { if (process.env.BEAM_DEBUG) try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), `${new Date().toISOString().slice(11, 23)} ${a.join(' ')}\n`); } catch { /* ignore */ } };
 
-let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater;
+let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater, cover;
 let firewall = { state: 'unknown' };
 let live = null;              // stream settings in use right now (config + browser changes)
 let capInfo = {};
@@ -100,6 +101,19 @@ async function boot() {
   server = new StreamServer({
     config, auth, webDir: WEB_DIR, assetsDir: ASSETS, userDir: USER_DIR, version: VERSION, getWelcome: welcomeFor,
   });
+  cover = new PrivacyScreen({
+    appDir: APP_DIR, userDir: USER_DIR, log: dbg,
+    getConfig: k => config.get(k),
+    getSession: () => {
+      const c = [...server.clients.values()].find(x => x.transport);
+      return c ? { device: c.device, since: c.connectedAt } : null;
+    },
+    getStreamedDisplay: currentDisplay,
+    onPeek: peek => {
+      server.broadcast({ t: 'cover', ...cover.publicState(), notice: peek ? 'Someone at the PC pressed Ctrl+Alt+Shift+H: its monitor now shows the screen.' : 'The PC\'s monitor is covered again.' });
+      auth.record('privacy', peek ? 'Someone at the PC uncovered the monitor (Ctrl+Alt+Shift+H).' : 'The monitor was covered again (Ctrl+Alt+Shift+H).');
+    },
+  });
   wireServer();
   await startServer();
 
@@ -140,9 +154,10 @@ async function boot() {
     sendToWindow('beam:state', state());
     // A monitor that woke up again: pick the picture back up for anyone waiting.
     if (server.clients.size) capSend('cap:reacquire');
+    cover.update();
   });
-  screen.on('display-removed', () => { sendToWindow('beam:state', state()); input.refreshVirtual(); });
-  screen.on('display-metrics-changed', () => input.refreshVirtual());
+  screen.on('display-removed', () => { sendToWindow('beam:state', state()); input.refreshVirtual(); cover.update(); });
+  screen.on('display-metrics-changed', () => { input.refreshVirtual(); cover.update(); });
 
   createTray();
   if (!(startHidden || config.get('app.startMinimized'))) showWindow();
@@ -395,6 +410,7 @@ function welcomeFor(c) {
     version: VERSION,
     schema: clientSchema(),
     secureTunnel: c.tunnel,
+    cover: cover.publicState(),
   };
 }
 
@@ -424,6 +440,7 @@ function wireServer() {
     input.releaseAll();
     auth.record('leave', `${c.device} disconnected after ${duration(Date.now() - c.connectedAt)} (${WHY[why] || why}).`, c.ip);
     if (!server.clients.size) { resetLive(); pushCaptureConfig(); }
+    if (![...server.clients.values()].some(x => x.transport)) cover.endSession(); else cover.update();
     updatePower();
     updateTray();
   });
@@ -460,6 +477,14 @@ function wireServer() {
       capSend('cap:start-webrtc', { id: c.id, latency: c.latency });
     }
     updateAudio();
+    cover.update();
+  });
+
+  // The streaming device picks what this PC's monitor shows (for this session only).
+  server.on('cover', (c, mode) => {
+    if (!config.get('privacy.browserCanChange') || !cover.setOverride(mode)) return;
+    server.broadcast({ t: 'cover', ...cover.publicState() });
+    auth.record('privacy', `${c.device} set this PC's monitor to: ${COVER_LABELS[mode] || mode}.`, c.ip);
   });
 
   server.on('signal', (c, data) => capSend('cap:signal', { id: c.id, data }));
@@ -494,6 +519,7 @@ function wireServer() {
     live.display = String(id);
     capSend('cap:reacquire');
     server.broadcast({ t: 'live', stream: live, display: String(id) });
+    cover.update();
   });
 
   server.on('clipboard', (c, text) => {
@@ -673,6 +699,10 @@ function duration(ms) {
 // ------------------------------------------------------------------ settings changes
 function onConfigChanged(changed, fromFile) {
   if (changed.some(p => p.startsWith('server.'))) startServer();
+  if (changed.some(p => p.startsWith('privacy.') || p === 'appearance.appName')) {
+    cover.update();
+    server.broadcast({ t: 'cover', ...cover.publicState() });
+  }
   if (changed.some(p => p.startsWith('stream.'))) {
     if (!server.clients.size) resetLive();
     else for (const p of changed) if (p.startsWith('stream.')) live[p.slice(7)] = config.get(p);
@@ -825,6 +855,7 @@ function state() {
     capInfo,
     inputError: input.available() ? null : input.loadError(),
     packaged: app.isPackaged,
+    coverSupported: cover ? cover.supported : false,
   };
 }
 
@@ -897,7 +928,7 @@ async function screenshotPages(dir) {
     const [id, sel] = entry.split('#');
     await win.webContents.executeJavaScript(`document.querySelector('[data-page="${id}"]').click()`);
     await wait(700);
-    if (sel) { await win.webContents.executeJavaScript(`document.getElementById(${JSON.stringify(sel)}).scrollIntoView({ block: 'center' })`); await wait(300); }
+    if (sel) { await win.webContents.executeJavaScript(`(document.getElementById(${JSON.stringify(sel)}) || document.querySelector(${JSON.stringify(sel)})).scrollIntoView({ block: 'center' })`); await wait(300); }
     await shot(sel ? `${id}-${sel}` : id);
   }
   console.log('[shots] saved to', dir);
@@ -1053,5 +1084,25 @@ handle('beam:updateCheck', () => updater.check(true));
 handle('beam:updateDownload', () => { updater.download(); return true; });
 handle('beam:updateInstall', () => updater.installNow());
 handle('beam:firewallCheck', () => checkFirewall());
+// Privacy screen: pick a picture (copied into the settings folder), remove it, or preview a cover.
+handle('beam:coverPicture', async () => {
+  const r = await dialog.showOpenDialog(win, { title: 'Choose a picture for the privacy screen', properties: ['openFile'], filters: [{ name: 'Pictures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const src = r.filePaths[0];
+  if (fs.statSync(src).size > 40 * 1048576) return { error: 'That picture is over 40 MB. Choose a smaller one.' };
+  const dir = app.getPath('userData');
+  for (const f of fs.readdirSync(dir)) if (/^cover-picture\./i.test(f)) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* in use */ } }
+  const name = `cover-picture${path.extname(src).toLowerCase()}`;
+  fs.copyFileSync(src, path.join(dir, name));
+  config.update({ 'privacy.picture': name });
+  return { name };
+});
+handle('beam:coverClearPicture', () => {
+  const file = cover.pictureFile();
+  if (file && path.dirname(file) === app.getPath('userData')) { try { fs.unlinkSync(file); } catch { /* ignore */ } }
+  config.update({ 'privacy.picture': '' });
+  return true;
+});
+handle('beam:coverTest', mode => cover.tryMode(mode || config.get('privacy.screen')));
 handle('beam:firewallFix', () => fixFirewall());
 handle('beam:quit', () => { quit(); return true; });

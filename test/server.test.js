@@ -32,7 +32,7 @@ async function setup(over = {}) {
   await server.start(null);
   const port = server.servers[0].address().port;
   const events = [];
-  for (const ev of ['client-join', 'client-leave', 'client-detach', 'client-resume', 'latency']) server.on(ev, (c, info) => events.push([ev, c.id, info]));
+  for (const ev of ['client-join', 'client-leave', 'client-detach', 'client-resume', 'latency', 'cover']) server.on(ev, (c, info) => events.push([ev, c.id, info]));
   const done = async () => { for (const t of server.timers) clearInterval(t); await server.stop(); };
   return { server, auth, config, port, events, done, base: `http://127.0.0.1:${port}` };
 }
@@ -148,6 +148,10 @@ test('socket: hello with token gets a session; bad token is refused', async () =
     await wait(100);
     assert.strictEqual(s.server.clients.get(w.id).latency, 'smooth');
     assert.ok(s.events.some(e => e[0] === 'latency'));
+    a.ws.send(JSON.stringify({ t: 'cover', mode: 'clock' }));
+    a.ws.send(JSON.stringify({ t: 'cover', mode: 42 }));
+    await wait(100);
+    assert.deepStrictEqual(s.events.filter(e => e[0] === 'cover').map(e => e[2]), ['clock'], 'the PC hears the chosen cover (bad values are dropped)');
 
     const b = socket(s.port, { headers: { Origin: 'https://other.site' }, hello: { token: 'wrong' } });
     await b.next('auth-failed');

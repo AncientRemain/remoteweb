@@ -1,0 +1,39 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body {
+  background: #000; color: #e7e8ea; user-select: none; cursor: none;
+  font: 15px/1.4 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+#shade, #picture, #card, #logo, #hint, #time, #date, #message, #who { display: none; }
+
+/* Dimmed: the window is transparent; a dark layer lets a little of the screen show through. */
+body[data-mode="dim"] { background: transparent; }
+body[data-mode="dim"] #shade { display: block; position: fixed; inset: 0; background: rgba(0, 0, 0, .86); }
+
+body[data-mode="picture"] #picture { display: block; position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+#card {
+  position: fixed; inset: 0; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; padding: 0 8vw; transition: transform 2s ease;
+}
+body[data-mode="message"] #card, body[data-mode="clock"] #card { display: flex; }
+
+#message { margin: 0; font-size: clamp(22px, 2.6vw, 40px); font-weight: 500; letter-spacing: -.01em; max-width: 30ch; }
+body[data-mode="message"] #message { display: block; }
+
+#time { font-size: clamp(72px, 11vw, 190px); font-weight: 300; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+#date { margin-top: 14px; font-size: clamp(16px, 1.6vw, 26px); color: #a3a6ad; }
+body[data-mode="clock"] #time, body[data-mode="clock"] #date { display: block; }
+
+#who { margin: 18px 0 0; font-size: clamp(13px, 1.05vw, 17px); color: #80848c; }
+body[data-mode="message"] #who.on, body[data-mode="clock"] #who.on { display: block; }
+
+#hint { position: fixed; left: 0; right: 0; bottom: 28px; margin: 0; text-align: center; font-size: 12.5px; color: #4f535a; }
+body[data-mode="message"] #hint, body[data-mode="clock"] #hint { display: block; }
+
+/* Floating logo (moves slowly so nothing burns into the screen) */
+#logo { position: fixed; left: 0; top: 0; align-items: center; gap: 14px; will-change: transform; }
+#logo img { width: 56px; height: 56px; }
+#logo span { font-size: 22px; font-weight: 500; color: #a3a6ad; }
+body[data-mode="logo"] #logo { display: flex; }

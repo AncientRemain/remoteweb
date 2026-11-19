@@ -470,6 +470,7 @@ class StreamServer extends EventEmitter {
       case 'input': if (Array.isArray(m.e)) this.emit('input', c, m.e); break;
       case 'quality': this.emit('quality', c, m); break;
       case 'display': this.emit('display', c, m.id); break;
+      case 'cover': if (typeof m.mode === 'string') this.emit('cover', c, m.mode); break;
       case 'keyframe': this.requestKey(); break;
       case 'stats':
         if (m.s && typeof m.s === 'object') {

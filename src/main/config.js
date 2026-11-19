@@ -92,6 +92,15 @@ const DEFAULTS = {
     streamPriority: 'high',
     updates: 'auto',
   },
+  // What this PC's own monitor shows while someone streams (the stream always shows the real screen).
+  privacy: {
+    screen: 'normal',
+    message: 'This PC is being used remotely.',
+    showDevice: true,
+    picture: '',
+    screens: 'all',
+    browserCanChange: true,
+  },
 };
 
 const enumOf = (values, labels) => ({ type: 'enum', values, labels });
@@ -161,6 +170,12 @@ const SCHEMA = {
   'app.closeToTray': { type: 'bool', label: 'Closing the window keeps it running in the tray' },
   'app.keepAwake': { type: 'bool', label: 'Keep this PC awake while a device is connected' },
   'app.streamPriority': { ...enumOf(['high', 'normal'], ['High (smooth even while gaming)', 'Normal']), label: 'Stream priority', help: 'High runs the stream above other programs while a device is connected, so a heavy game can\'t make it stutter.' },
+  'privacy.screen': { ...enumOf(['normal', 'black', 'dim', 'message', 'clock', 'picture', 'logo'], ['Normal (show the screen)', 'Black (looks switched off)', 'Dimmed', 'A message', 'A clock', 'A picture', 'Floating logo']), label: "This PC's monitor while streaming", help: "Covers the monitor here so people near the PC can't watch. The stream itself always shows the real screen." },
+  'privacy.message': { type: 'text', max: 200, label: 'Message', help: 'Shown with "A message".', placeholder: 'This PC is being used remotely.' },
+  'privacy.showDevice': { type: 'bool', label: 'Say who is connected', help: 'Shows the connected device and for how long on the message and clock screens.' },
+  'privacy.picture': { type: 'text', max: 500, label: 'Picture', help: 'Shown with "A picture".' },
+  'privacy.screens': { ...enumOf(['all', 'streamed'], ['All monitors', 'Only the monitor being streamed']), label: 'Monitors to cover' },
+  'privacy.browserCanChange': { type: 'bool', label: 'Let the streaming device change it', help: "Adds a \"This PC's monitor\" menu to the stream page's toolbar." },
   'app.updates': { ...enumOf(['auto', 'download', 'notify', 'off'], ['Install automatically', 'Download, then ask me', 'Just tell me', 'Off']), label: 'When a new version is out', help: 'Automatic updates install only after nobody has been connected for a few minutes. The app then starts again by itself, with remote access back on if it was on.' },
 };
 

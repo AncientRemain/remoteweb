@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' file: data:">
+  <title>Privacy screen</title>
+  <link rel="stylesheet" href="cover.css">
+</head>
+<!-- Shown on this PC's own monitor while someone streams. The window is left out of screen
+     capture, so the stream shows the real screen underneath. -->
+<body data-mode="black">
+  <div id="shade"></div>
+  <img id="picture" alt="">
+  <main id="card">
+    <div id="time"></div>
+    <div id="date"></div>
+    <p id="message"></p>
+    <p id="who"></p>
+  </main>
+  <div id="logo"><img src="../../assets/icon.png" alt=""><span id="logo-name"></span></div>
+  <p id="hint"></p>
+  <script src="cover.js"></script>
+</body>
+</html>

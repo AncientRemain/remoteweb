@@ -27,6 +27,7 @@
     power: '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/>',
     x: '<path d="M18 6L6 18M6 6l12 12"/>',
     activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+    eyeoff: '<path d="M3 3l18 18"/><path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 9 4.6 10 7-.5 1.2-1.4 2.6-2.7 3.9M6.5 6.5C4.3 7.9 2.7 10 2 12c1 2.4 5 7 10 7 1.6 0 3.1-.4 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   };
   const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]}</svg>`;
 
@@ -371,6 +372,14 @@
       case 'wsconfig': onWsConfig(m); break;
       case 'audioconfig': onAudioConfig(m); break;
       case 'hoststats': S.hostStats = m.s; break;
+      case 'cover': {
+        const before = S.cover && S.cover.mode;
+        S.cover = m;
+        if (m.notice) toast(m.notice);
+        else if (before && before !== m.mode) toast(`The PC's monitor now shows: ${((m.choices || []).find(c => c.id === m.mode) || {}).label || m.mode}`);
+        buildToolbar();
+        break;
+      }
       case 'clipboard': onRemoteClipboard(m.text); break;
       case 'kicked':
         S.kicked = true; teardownMedia();
@@ -417,6 +426,7 @@
     S.displays = m.displays || S.displays;
     S.display = m.display || S.display;
     S.control = m.control !== false;
+    if (m.cover) S.cover = m.cover;
     applyAppearance({ ...m.appearance, appName: m.appName });
     applyClientSettings();
     buildToolbar();
@@ -1327,6 +1337,7 @@
       ${S.displays.length > 1 ? `<button class="tb-btn" data-act="display" title="Switch screen">${icon('monitor')}</button>` : ''}
       ${isTouch ? `<button class="tb-btn" data-act="keyboard" title="Keyboard">${icon('keyboard')}</button>` : ''}
       <button class="tb-btn" data-act="keys" title="Special keys">${icon('command')}</button>
+      ${S.cover && S.cover.allow ? `<button class="tb-btn ${S.cover.mode !== 'normal' && !S.cover.peek ? 'on' : ''}" data-act="cover" title="What this PC's monitor shows">${icon('eyeoff')}</button>` : ''}
       <button class="tb-btn" data-act="clipboard" title="Clipboard and typing">${icon('clipboard')}</button>
       ${isTouch ? '' : `<button class="tb-btn ${locked ? 'on' : ''}" data-act="mouse" title="${locked ? 'Mouse locked for games (click to unlock)' : 'Lock mouse for games'}">${icon(locked ? 'lock' : 'mouse')}</button>`}
       <button class="tb-btn ${sound ? '' : 'on'}" data-act="sound" title="${sound ? 'Mute' : 'Unmute'}">${icon(sound ? 'volume' : 'mute')}</button>
@@ -1343,7 +1354,7 @@
     if (!b) return;
     const act = b.dataset.act;
     b.blur(); // so Space / Enter keep going to the PC
-    if (['quality', 'display', 'keys', 'clipboard', 'power'].includes(act)) return togglePop(act, b);
+    if (['quality', 'display', 'keys', 'clipboard', 'power', 'cover'].includes(act)) return togglePop(act, b);
     closePop();
     if (act === 'keyboard') { kbd.focus(); resetKbd(); }
     if (act === 'mouse') { setClient('mouseMode', cfg('mouseMode') === 'relative' ? 'absolute' : 'relative'); if (cfg('mouseMode') === 'relative') toast('Click the picture to lock the mouse. Press Esc to release it.'); else if (document.pointerLockElement) document.exitPointerLock(); }
@@ -1432,6 +1443,10 @@
         ['balanced', 'Small buffer'],
         ['smooth', 'For weak networks'],
       ].map(([mode, note]) => `<button class="menu-item ${latencyMode() === mode ? 'active' : ''}" data-latency="${mode}"><span>${LATENCY_NAMES[mode]}</span><small>${note}</small></button>`).join('');
+    } else if (kind === 'cover') {
+      const cv = S.cover || { choices: [] };
+      html = '<h4>This PC\'s monitor</h4>' + cv.choices.map(c => `<button class="menu-item ${c.id === cv.mode ? 'active' : ''}" data-cover="${esc(c.id)}"><span>${esc(c.label)}</span></button>`).join('')
+        + `<p class="pop-note">${cv.peek ? 'Someone at the PC is showing the screen (Ctrl+Alt+Shift+H).' : 'Only the monitor at the PC changes. You still see the real screen.'}</p>`;
     } else if (kind === 'display') {
       html = '<h4>Screen</h4>' + S.displays.map(d => `<button class="menu-item ${String(d.id) === String(S.display) ? 'active' : ''}" data-display="${esc(d.id)}"><span>${esc(d.name)}${d.primary ? ' (main)' : ''}</span><small>${d.width}×${d.height} · ${d.refresh} Hz</small></button>`).join('');
     } else if (kind === 'keys') {
@@ -1474,6 +1489,7 @@
       toast(`Quality: ${p.name}`);
       closePop();
     } else if (d.latency) { closePop(); setLatencyMode(d.latency); }
+    else if (d.cover) { closePop(); send({ t: 'cover', mode: d.cover }); }
     else if (d.open) { closePop(); openPanel(d.open); }
     else if (d.display) { send({ t: 'display', id: d.display }); S.display = d.display; closePop(); toast('Switching screen…'); }
     else if (d.key != null) { sendInput(['c', KEYS[+d.key][1]]); }
