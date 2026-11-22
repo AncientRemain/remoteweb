@@ -278,3 +278,30 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .panel-search input { width: 100%; height: 32px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid rgba(128, 128, 128, .3); background-color: rgba(0, 0, 0, .2); outline: none; color: inherit; font: inherit; font-size: 13.5px; }
 .panel-search input:focus { border-color: var(--accent); }
 .tabs[hidden] { display: none; }
+
+/* ---------- capture (recording label, picture-in-picture source) and the volume slider */
+.tb-btn.rec { color: var(--bad); opacity: 1; }
+#rec { position: fixed; z-index: 7; top: 10px; right: 10px; display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid rgba(255, 255, 255, .1); background: rgba(12, 13, 15, .92); color: #e7e8ea; font: 600 12px/1 var(--mono); letter-spacing: .04em; cursor: pointer; }
+#rec.low { top: auto; bottom: 10px; }
+#rec i { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: recblink 1.2s steps(2, start) infinite; }
+@keyframes recblink { to { visibility: hidden; } }
+.pip-src { position: fixed; left: -10px; top: -10px; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pop-vol { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; font-size: 13.5px; }
+.pop-vol input[type="range"] { flex: 1; min-width: 120px; appearance: none; -webkit-appearance: none; height: 4px; border-radius: 2px; background: rgba(128, 128, 128, .35); outline: none; }
+.pop-vol input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); cursor: pointer; }
+.pop-vol output { width: 40px; text-align: right; font: 12px var(--mono); color: #80848c; }
+
+/* ---------- paused picture (nobody using it) and the connection test result */
+#paused { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; background: rgba(0, 0, 0, .5); cursor: pointer; }
+.paused-card { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 320px; padding: 18px 22px; border-radius: var(--radius); background: rgba(12, 13, 15, .94); border: 1px solid rgba(255, 255, 255, .1); color: #e7e8ea; text-align: center; }
+.paused-card svg { width: 22px; height: 22px; color: #a3a6ad; margin-bottom: 2px; }
+.paused-card b { font-size: 14px; font-weight: 600; }
+.paused-card span { font-size: 12.5px; color: #a3a6ad; line-height: 1.45; }
+.speed { margin: 2px 6px 6px; padding: 10px 12px; border-radius: var(--r-sm); border: 1px solid rgba(128, 128, 128, .25); }
+.speed-nums { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; align-items: baseline; }
+.speed-nums b { font: 600 17px var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+.speed-nums span { font-size: 12px; color: #80848c; }
+.speed p { margin: 8px 0 0; font-size: 12.5px; line-height: 1.45; }
+.speed .btn { margin-top: 8px; }
+.speed-ok { color: #80848c; }
+.menu-item:disabled { opacity: .6; cursor: default; }

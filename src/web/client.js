@@ -20,6 +20,9 @@
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
     volume: '<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>',
+    camera: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/>',
+    rec: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/>',
+    pause: '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
     mute: '<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/>',
     expand: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
     shrink: '<path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/>',
@@ -92,6 +95,7 @@
     transport: null, pc: null, ctl: null, mv: null, remoteSet: false, pendingCandidates: [], fallbackTimer: null, discTimer: null,
     gotFrame: false, announced: false, rvfcToken: 0,
     decoder: null, wsConfig: null, needKey: true, ctx: null, frameMeta: new Map(), audioDecoder: null, actx: null, gain: null, nextAudio: 0,
+    dataBytes: 0, // everything received on this visit (shown in the full stats)
     wsFrames: 0, wsBytes: 0, decodeSum: 0, decodeN: 0, latSum: 0, latN: 0, clientDropped: 0,
     rtcLatSum: 0, rtcLatN: 0, prevRtc: null, hostStats: null, hostStatsAt: 0,
     // Frozen-picture recovery (see the watchdog below).
@@ -541,6 +545,8 @@
   function takeStartReason() { const r = S.startReason; S.startReason = null; return r || undefined; }
 
   function teardownMedia() {
+    if (REC.rec) stopRecording();
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
     clearTimeout(S.fallbackTimer); clearTimeout(S.discTimer); clearTimeout(S.retryTimer); clearTimeout(S.probeTimer); clearTimeout(S.startTimer);
     if (S.pc) { try { S.pc.close(); } catch { /* ignore */ } }
     S.pc = null; S.ctl = null; S.mv = null; S.rvfcToken++;
@@ -591,6 +597,7 @@
     showMedia('video');
     overlay('Connecting…', 'Opening a direct connection to your PC');
     send({ t: 'start', transport: 'webrtc', latency: latencyMode(), reason: takeStartReason() });
+    resendPause();
     const pc = new RTCPeerConnection({ iceServers: (S.welcome && S.welcome.ice) || [], bundlePolicy: 'max-bundle' });
     S.pc = pc;
     const vt = pc.addTransceiver('video', { direction: 'recvonly' });
@@ -738,6 +745,7 @@
     if (!codecs.length) { overlay('This browser cannot decode video', 'Try Chrome or Edge, or switch the connection type to WebRTC.', false); return; }
     ensureAudio();
     send({ t: 'start', transport: 'websocket', codecs, latency: latencyMode(), reason: takeStartReason() });
+    resendPause();
     armStartTimer(10000);
   }
 
@@ -806,6 +814,7 @@
   const DECODE_BACKLOG = { lowest: 8, balanced: 12, smooth: 24 };
 
   function onBinary(buf) {
+    S.dataBytes += buf.byteLength;
     if (buf.byteLength < 14) return;
     const dv = new DataView(buf);
     const type = dv.getUint8(0), key = (dv.getUint8(1) & 1) === 1, seq = dv.getUint32(2, true), ts = dv.getFloat64(6, true);
@@ -861,6 +870,10 @@
         S.actx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
         S.gain = S.actx.createGain();
         S.gain.connect(S.actx.destination);
+        // Sound plays through mix (full level; recordings take it from here), then gain (volume, mute).
+        S.mix = S.actx.createGain();
+        S.mix.connect(S.gain);
+        applyVolume();
       } catch { S.actx = null; }
     }
     if (S.actx && S.actx.state === 'suspended') S.actx.resume().catch(() => {});
@@ -889,7 +902,7 @@
     data.close();
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(S.gain);
+    src.connect(S.mix || S.gain);
     const now = ctx.currentTime;
     const target = { lowest: 0.03, balanced: 0.07, smooth: 0.16 }[latencyMode()];
     if (S.nextAudio < now + 0.005 || S.nextAudio > now + target + 0.3) S.nextAudio = now + target;
@@ -954,6 +967,7 @@
         if (p) {
           const dt = (t - p.t) / 1000;
           st.kbps = ((cur.bytes - p.bytes) * 8) / dt / 1000;
+          S.dataBytes += Math.max(0, cur.bytes - p.bytes);
           const lost = cur.lost - p.lost, recv = cur.recv - p.recv;
           st.loss = recv + lost > 0 ? (Math.max(0, lost) / (recv + Math.max(0, lost))) * 100 : 0;
           st.bufferMs = cur.jbe > p.jbe ? ((cur.jbd - p.jbd) / (cur.jbe - p.jbe)) * 1000 : null;
@@ -1028,7 +1042,7 @@
   }
   setInterval(() => {
     const t = performance.now();
-    const watching = S.gotFrame && S.ws && S.ws.readyState === 1 && !document.hidden && $('#overlay').classList.contains('gone')
+    const watching = S.gotFrame && !S.paused && S.ws && S.ws.readyState === 1 && !document.hidden && $('#overlay').classList.contains('gone')
       && (S.transport === 'websocket' || (S.transport === 'webrtc' && S.pc && S.pc.connectionState === 'connected'));
     const last = Math.max(S.watchFrom, S.transport === 'websocket' ? S.lastDecodedAt : S.rtcProgressAt);
     if (!watching || !hostSending() || t - last < FROZEN.key) { S.frozenStep = 0; return; }
@@ -1091,6 +1105,7 @@
       <div class="legend"><span><i class="sw a"></i>ping</span><span><i class="sw b"></i>latency</span><span class="r">60 s</span></div>
       <div class="rows">
         ${row('Bitrate', `${mbps(s.kbps)} Mb/s`)}
+        ${row('Data used', fmtBytes(S.dataBytes))}
         ${row('Resolution', s.w ? `${s.w}×${s.h}` : '–')}
         ${row('Codec', esc(s.codec || '–'))}
         ${row('Packet loss', s.loss == null ? 'n/a' : `${fmt(s.loss, 1)}%`, grade(s.loss, 1, 4))}
@@ -1153,8 +1168,7 @@
     layout();
     renderHud();
     if (S.pc) for (const r of S.pc.getReceivers()) applyBuffer(r);
-    if (S.audioEl) S.audioEl.muted = cfg('sound') === false;
-    if (S.gain) S.gain.gain.value = cfg('sound') === false ? 0 : 1;
+    applyVolume();
     applyPicture();
     updateTouchPad();
   }
@@ -1250,10 +1264,13 @@
   };
   addEventListener('keydown', e => {
     if (!active()) return;
+    if (PAUSE.swallow === e.timeStamp) { e.preventDefault(); return; }
     if (e.ctrlKey && e.altKey && e.shiftKey) {
       if (e.code === 'KeyM') { e.preventDefault(); toggleToolbar(); return; }
       if (e.code === 'KeyS') { e.preventDefault(); cycleStats(); return; }
       if (e.code === 'KeyF') { e.preventDefault(); toggleFullscreen(); return; }
+      if (e.code === 'KeyP') { e.preventDefault(); screenshot(); return; }
+      if (e.code === 'KeyR') { e.preventDefault(); if (!e.repeat) toggleRecording(); return; }
     }
     const t = e.target instanceof Element ? e.target : null;
     if (t && t !== document.body && t.id !== 'kbd' && (t.closest('#panel, #pop') || /INPUT|TEXTAREA|SELECT/.test(t.tagName))) return;
@@ -1536,7 +1553,8 @@
       ${S.cover && S.cover.allow ? `<button class="tb-btn ${S.cover.mode !== 'normal' && !S.cover.peek ? 'on' : ''}" data-act="cover" title="What this PC's monitor shows">${icon('eyeoff')}</button>` : ''}
       <button class="tb-btn" data-act="clipboard" title="Clipboard and typing">${icon('clipboard')}</button>
       ${isTouch ? '' : `<button class="tb-btn ${locked ? 'on' : ''}" data-act="mouse" title="${locked ? 'Mouse locked for games (click to unlock)' : 'Lock mouse for games'}">${icon(locked ? 'lock' : 'mouse')}</button>`}
-      <button class="tb-btn ${sound ? '' : 'on'}" data-act="sound" title="${sound ? 'Mute' : 'Unmute'}">${icon(sound ? 'volume' : 'mute')}</button>
+      <button class="tb-btn ${sound ? '' : 'on'}" data-act="sound" title="Sound and volume">${icon(sound ? 'volume' : 'mute')}</button>
+      <button class="tb-btn ${REC.rec ? 'rec' : ''}" data-act="capture" title="${REC.rec ? 'Recording: stop it here' : 'Screenshot, record a clip, picture-in-picture'}">${icon(REC.rec ? 'rec' : 'camera')}</button>
       <button class="tb-btn ${statsOn ? 'on' : ''}" data-act="stats" title="Stats overlay (Ctrl+Alt+Shift+S)">${icon('activity')}</button>
       <button class="tb-btn" data-act="fullscreen" title="Full screen (Ctrl+Alt+Shift+F)">${icon(fs ? 'shrink' : 'expand')}</button>
       <button class="tb-btn" data-act="settings" title="Settings">${icon('sliders')}</button>
@@ -1550,11 +1568,10 @@
     if (!b) return;
     const act = b.dataset.act;
     b.blur(); // so Space / Enter keep going to the PC
-    if (['quality', 'display', 'keys', 'clipboard', 'power', 'cover', 'pads'].includes(act)) return togglePop(act, b);
+    if (['quality', 'display', 'keys', 'clipboard', 'power', 'cover', 'pads', 'sound', 'capture'].includes(act)) return togglePop(act, b);
     closePop();
     if (act === 'keyboard') { kbd.focus(); resetKbd(); }
     if (act === 'mouse') { setClient('mouseMode', cfg('mouseMode') === 'relative' ? 'absolute' : 'relative'); if (cfg('mouseMode') === 'relative') toast('Click the picture to lock the mouse. Press Esc to release it.'); else if (document.pointerLockElement) document.exitPointerLock(); }
-    if (act === 'sound') { setClient('sound', cfg('sound') === false); if (cfg('sound') !== false) { ensureAudio(); playSound(); } }
     if (act === 'stats') cycleStats();
     if (act === 'fullscreen') toggleFullscreen();
     if (act === 'settings') openPanel();
@@ -1606,6 +1623,287 @@
     setTimeout(layout, 50);
   });
 
+  // ------------------------------------------------------------ sound volume
+  const volume = () => Math.max(0, Math.min(100, Number(cfg('volume') ?? 100) || 0)) / 100;
+  function applyVolume() {
+    const muted = cfg('sound') === false;
+    if (S.audioEl) { S.audioEl.muted = muted; S.audioEl.volume = volume(); }
+    if (S.gain) S.gain.gain.value = muted ? 0 : volume();
+  }
+  $('#pop').addEventListener('input', e => {
+    if (e.target.id !== 'pop-volume') return;
+    prefs.client.volume = Number(e.target.value);
+    if (cfg('sound') === false && prefs.client.volume > 0) { prefs.client.sound = true; ensureAudio(); }
+    applyVolume();
+    $('#pop-volume-out').textContent = `${prefs.client.volume}%`;
+  });
+  $('#pop').addEventListener('change', e => { if (e.target.id === 'pop-volume') { savePrefs(); buildToolbar(); } });
+
+  const fmtBytes = b => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.round(b / 1e6)} MB`);
+
+  // ------------------------------------------------------------ pausing the picture
+  // A hidden tab (after a few seconds) or nobody using the stream: the PC stops sending the
+  // picture, sound carries on. Saves data on school and mobile networks, the device's battery
+  // and the PC's work. The picture is back, from a fresh keyframe, the moment it's needed.
+  const PAUSE = { reasons: new Set(), sent: false, hideTimer: null, swallow: -1 };
+  S.lastInputAt = performance.now();
+  const pausable = () => S.gotFrame && !REC.rec && !document.pictureInPictureElement;
+  function setPaused(reason, on) {
+    if (on) PAUSE.reasons.add(reason); else PAUSE.reasons.delete(reason);
+    renderPaused();
+    const want = PAUSE.reasons.size > 0;
+    if (want === PAUSE.sent) return;
+    PAUSE.sent = want;
+    S.paused = want;
+    send({ t: 'pause', on: want });
+    if (!want) {
+      S.watchFrom = performance.now();
+      if (S.transport === 'websocket' && S.gotFrame) { S.needKey = true; askKey(true); }
+    }
+  }
+  function resendPause() { if (PAUSE.sent) send({ t: 'pause', on: true }); }
+  function noteUse(e) {
+    S.lastInputAt = performance.now();
+    if (!PAUSE.reasons.has('idle')) return;
+    if (e && e.type === 'keydown') PAUSE.swallow = e.timeStamp;
+    setPaused('idle', false);
+  }
+  for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(ev, noteUse, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(PAUSE.hideTimer);
+    if (!document.hidden) { S.lastInputAt = performance.now(); setPaused('hidden', false); return; }
+    if (cfg('pauseHidden') === false) return;
+    PAUSE.hideTimer = setTimeout(() => { if (document.hidden && pausable()) setPaused('hidden', true); }, 4000);
+  });
+  setInterval(() => {
+    const mins = Number(cfg('pauseIdle') ?? 15);
+    if (!mins || PAUSE.reasons.has('idle') || !pausable() || document.hidden) return;
+    if (performance.now() - S.lastInputAt > mins * 60000) setPaused('idle', true);
+  }, 5000);
+  // Shown while paused for lack of use. It also catches the click that wakes it, so that click
+  // doesn't land on the PC.
+  function renderPaused() {
+    let el = $('#paused');
+    if (!PAUSE.reasons.has('idle')) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'paused';
+      el.innerHTML = `<div class="paused-card">${icon('pause')}<b>Picture paused to save data</b><span>Move the mouse, tap or press a key to continue.</span></div>`;
+      el.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); noteUse(e); });
+      $('#stream').appendChild(el);
+    }
+    el.hidden = false;
+  }
+
+  // ------------------------------------------------------------ connection test
+  // Times a download from the PC through this page's own connection, with the picture paused so
+  // it measures what the connection can carry, then suggests the best quality preset for it.
+  function recommendPreset(mbits) {
+    const order = S.presets.map((p, i) => [p.bitrateKbps, i]).sort((a, b) => a[0] - b[0]);
+    let best = order.length ? order[0][1] : 0;
+    for (const [kbps, i] of order) if (kbps <= mbits * 1000 * 0.7) best = i; // leave 30 % spare
+    return best;
+  }
+  function speedHtml() {
+    const sp = S.speed;
+    if (!sp) return '';
+    const p = S.presets[sp.rec];
+    const cur = S.stream;
+    const using = p && p.resolution === cur.resolution && p.fps === cur.fps && p.bitrateKbps === cur.bitrateKbps;
+    const num = sp.mbps >= 10 ? Math.round(sp.mbps) : sp.mbps.toFixed(1);
+    return `<div class="speed"><div class="speed-nums"><b>${num}</b><span>Mb/s from the PC</span><b>${sp.ping != null ? Math.round(sp.ping) : '–'}</b><span>ms ping</span></div>`
+      + (p ? `<p>Best fit: <b>${esc(p.name)}</b> · ${resLabel(p.resolution)} · ${p.fps} fps · ${mbps(p.bitrateKbps)} Mbps</p>`
+        + (using ? '<p class="speed-ok">That\'s what you\'re using.</p>' : `<button class="btn primary small" data-speed-use="${sp.rec}">Use it</button>`) : '')
+      + '</div>';
+  }
+  async function runSpeedTest() {
+    if (S.speedBusy) return;
+    S.speedBusy = true;
+    refreshPop();
+    setPaused('test', true);
+    try {
+      await new Promise(r => setTimeout(r, 400)); // let frames already on their way arrive
+      const get = async n => {
+        const t0 = performance.now();
+        const r = await fetch(`/api/speedtest?n=${n}&r=${Math.random().toString(36).slice(2)}`, { cache: 'no-store', headers: authHeaders() });
+        if (!r.ok) throw new Error(String(r.status));
+        const b = await r.arrayBuffer();
+        return { bytes: b.byteLength, ms: Math.max(1, performance.now() - t0) };
+      };
+      await get(262144); // warms the connection up
+      let n = 1048576, res = await get(n);
+      while (res.ms < 1200 && n < 32 * 1048576) { n = Math.min(32 * 1048576, n * 4); res = await get(n); }
+      const mb = (res.bytes * 8) / (res.ms / 1000) / 1e6;
+      S.speed = { mbps: mb, ping: S.ping.rtt, at: Date.now(), rec: recommendPreset(mb) };
+    } catch {
+      toast('The connection test didn\'t work. Try again in a moment.', 'error');
+    } finally {
+      setPaused('test', false);
+      S.speedBusy = false;
+    }
+    refreshPop();
+    const pop = $('#pop');
+    if (!pop.hidden) pop.scrollTop = pop.scrollHeight; // the result is at the bottom of the menu
+    const best = S.speed && S.presets[S.speed.rec];
+    if (best) toast(`Your connection: ${S.speed.mbps >= 10 ? Math.round(S.speed.mbps) : S.speed.mbps.toFixed(1)} Mb/s. Best fit: ${best.name}.`);
+  }
+  // Redraws the open menu in place (e.g. when a result comes in).
+  function refreshPop() {
+    const kind = S.popFor;
+    const btn = kind && $(`#toolbar [data-act="${kind}"]`);
+    if (!btn) return;
+    S.popFor = null;
+    togglePop(kind, btn);
+  }
+
+  // ------------------------------------------------------------ screenshots, clips, picture-in-picture
+  // All of it happens in this browser: the PC and the stream don't notice. Files go to Downloads.
+  const REC_MAX_MIN = 10;
+  const REC = { rec: null, chunks: [], started: 0, timer: null, mime: '', stream: null };
+  const stamp = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`; };
+  const fileTitle = () => ((S.welcome && S.welcome.appName) || 'Beam Remote').replace(/[\\/:*?"<>|]+/g, '').trim() || 'Beam Remote';
+  const fmtDur = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  const recTime = () => fmtDur((Date.now() - REC.started) / 1000);
+  const pipSupported = () => !!document.pictureInPictureEnabled;
+
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // The full-resolution frame, without this device's picture adjustments.
+  async function screenshot() {
+    if (!S.gotFrame) { toast('No picture yet.'); return; }
+    let c = $('#canvas');
+    if (S.transport === 'webrtc') {
+      const v = $('#video');
+      if (!v.videoWidth) { toast('No picture yet.'); return; }
+      c = document.createElement('canvas');
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      c.getContext('2d').drawImage(v, 0, 0);
+    }
+    const blob = await new Promise(r => { try { c.toBlob(r, 'image/png'); } catch { r(null); } });
+    if (!blob) { toast('Screenshots don\'t work in this browser.', 'error'); return; }
+    saveBlob(blob, `${fileTitle()} ${stamp()}.png`);
+    toast('Screenshot saved to Downloads');
+  }
+
+  function recMime() {
+    if (typeof MediaRecorder !== 'function') return null;
+    return ['video/mp4;codecs=avc1.640028,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  }
+  // MP4 first: it plays almost everywhere and keeps its length; WebM where MP4 can't be recorded.
+  // Picture and full-level sound (not affected by this device's volume or mute).
+  function recStream() {
+    if (S.transport === 'webrtc') {
+      const v = $('#video').srcObject;
+      const video = v ? v.getVideoTracks() : [];
+      const audio = S.audioEl && S.audioEl.srcObject ? S.audioEl.srcObject.getAudioTracks() : [];
+      return video.length ? new MediaStream([...video, ...audio]) : null;
+    }
+    const c = $('#canvas');
+    if (!c.captureStream) return null;
+    const out = c.captureStream(Math.min(60, (S.stream && S.stream.fps) || 60));
+    ensureAudio();
+    if (S.actx && S.mix) {
+      if (!S.recDest) { S.recDest = S.actx.createMediaStreamDestination(); S.mix.connect(S.recDest); }
+      for (const t of S.recDest.stream.getAudioTracks()) out.addTrack(t);
+    }
+    return out;
+  }
+  function toggleRecording() { if (REC.rec) stopRecording(); else startRecording(); }
+  function startRecording() {
+    if (!S.gotFrame) { toast('No picture yet.'); return; }
+    const mime = recMime();
+    if (mime === null) { toast('This browser can\'t record. Try Chrome or Edge.', 'error'); return; }
+    const stream = recStream();
+    if (!stream) { toast('Recording isn\'t available here.', 'error'); return; }
+    let rec;
+    try { rec = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 6e6, audioBitsPerSecond: 128000 }); } catch {
+      toast('This browser can\'t record this stream.', 'error');
+      return;
+    }
+    Object.assign(REC, { rec, chunks: [], started: Date.now(), mime: rec.mimeType || mime || 'video/webm', stream });
+    rec.ondataavailable = e => { if (e.data && e.data.size) REC.chunks.push(e.data); };
+    rec.onstop = finishRecording;
+    rec.start(1000);
+    REC.timer = setInterval(() => {
+      renderRec();
+      if (Date.now() - REC.started > REC_MAX_MIN * 60000) { toast(`Clips stop after ${REC_MAX_MIN} minutes.`); stopRecording(); }
+    }, 500);
+    renderRec();
+    buildToolbar();
+    toast('Recording. Stop it from the capture button, the red label or Ctrl+Alt+Shift+R.');
+  }
+  function stopRecording() {
+    if (REC.rec && REC.rec.state !== 'inactive') REC.rec.stop(); // saves in finishRecording
+    else finishRecording();
+  }
+  function finishRecording() {
+    if (!REC.rec) return;
+    clearInterval(REC.timer);
+    const { mime, chunks, started, stream } = REC;
+    // Only the canvas capture belongs to the recording; WebRTC's tracks are the live stream.
+    if (S.transport !== 'webrtc' && stream) for (const t of stream.getVideoTracks()) t.stop();
+    Object.assign(REC, { rec: null, chunks: [], stream: null });
+    renderRec();
+    buildToolbar();
+    if (!chunks.length) { toast('Nothing was recorded.'); return; }
+    const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+    saveBlob(new Blob(chunks, { type: mime.split(';')[0] }), `${fileTitle()} clip ${stamp()}.${ext}`);
+    toast(`Clip saved to Downloads (${fmtDur((Date.now() - started) / 1000)})`);
+  }
+  // A small "REC 0:42" label over the stream while recording; clicking it stops.
+  function renderRec() {
+    let el = $('#rec');
+    if (!REC.rec) { if (el) el.hidden = true; return; }
+    if (!el) {
+      el = document.createElement('button');
+      el.id = 'rec'; el.type = 'button'; el.title = 'Stop recording';
+      el.addEventListener('click', stopRecording);
+      $('#stream').appendChild(el);
+    }
+    el.hidden = false;
+    el.classList.toggle('low', cfg('stats') !== 'off' && (cfg('statsPosition') || 'top-left') === 'top-right');
+    el.innerHTML = `<i></i>REC ${recTime()}`;
+  }
+
+  // The stream in the browser's small floating window, to watch the PC while doing something else.
+  async function togglePip() {
+    try {
+      if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return; }
+      if (!S.gotFrame) { toast('No picture yet.'); return; }
+      let v = $('#video');
+      if (S.transport !== 'webrtc') {
+        if (!S.pipVideo) {
+          S.pipVideo = document.createElement('video');
+          S.pipVideo.muted = true; S.pipVideo.playsInline = true; S.pipVideo.className = 'pip-src';
+          document.body.appendChild(S.pipVideo);
+          S.pipVideo.addEventListener('leavepictureinpicture', () => {
+            const st = S.pipVideo.srcObject;
+            if (st) st.getTracks().forEach(t => t.stop());
+            S.pipVideo.srcObject = null;
+          });
+        }
+        S.pipVideo.srcObject = $('#canvas').captureStream(30);
+        await S.pipVideo.play();
+        v = S.pipVideo;
+      }
+      v.disablePictureInPicture = false;
+      await v.requestPictureInPicture();
+      v.addEventListener('leavepictureinpicture', () => { if (v.id === 'video') v.disablePictureInPicture = true; }, { once: true });
+      toast('The stream keeps playing in a small window.');
+    } catch {
+      toast('Picture-in-picture isn\'t available in this browser.', 'error');
+    }
+  }
+
   // ------------------------------------------------------------ popovers
   const KEYS = [
     ['Task Manager', ['ControlLeft', 'ShiftLeft', 'Escape'], 'Ctrl+Shift+Esc'],
@@ -1638,7 +1936,9 @@
         ['lowest', 'Shown on arrival'],
         ['balanced', 'Small buffer'],
         ['smooth', 'For weak networks'],
-      ].map(([mode, note]) => `<button class="menu-item ${latencyMode() === mode ? 'active' : ''}" data-latency="${mode}"><span>${LATENCY_NAMES[mode]}</span><small>${note}</small></button>`).join('');
+      ].map(([mode, note]) => `<button class="menu-item ${latencyMode() === mode ? 'active' : ''}" data-latency="${mode}"><span>${LATENCY_NAMES[mode]}</span><small>${note}</small></button>`).join('')
+        + '<h4>Connection</h4>' + speedHtml()
+        + `<button class="menu-item" data-speed="test" ${S.speedBusy ? 'disabled' : ''}><span>${S.speedBusy ? 'Testing…' : S.speed ? 'Test again' : 'Test my connection'}</span><small>About 3 seconds</small></button>`;
     } else if (kind === 'pads') {
       const list = [...PADS.entries()];
       const state = p => (p.error === 'nodriver' ? 'PC needs the driver' : p.error ? 'Not connected' : p.player ? `Player ${p.player}` : 'Connecting…');
@@ -1666,6 +1966,19 @@
         <h4>Type on the PC</h4>
         <div class="pop-pad"><textarea id="type-text" placeholder="Text to type on the PC. Works where paste doesn't."></textarea>
         <div class="row end"><button class="btn primary small" data-clip="type">Type it</button></div></div>`;
+    } else if (kind === 'sound') {
+      const on = cfg('sound') !== false;
+      const v = Math.round(volume() * 100);
+      html = `<h4>Sound</h4>
+        <button class="menu-item ${on ? 'active' : ''}" data-snd="toggle"><span>${on ? 'Sound on' : 'Sound off'}</span><small>${on ? 'Click to mute' : 'Click to play'}</small></button>
+        <div class="pop-vol"><span>Volume</span><input type="range" min="0" max="100" step="1" value="${v}" id="pop-volume" aria-label="Volume"><output id="pop-volume-out">${v}%</output></div>`;
+    } else if (kind === 'capture') {
+      const inPip = !!document.pictureInPictureElement;
+      html = `<h4>Capture</h4>
+        <button class="menu-item" data-cap="shot"><span>Screenshot</span><kbd>Ctrl+Alt+Shift+P</kbd></button>
+        <button class="menu-item ${REC.rec ? 'active' : ''}" data-cap="rec"><span>${REC.rec ? `Stop recording · ${recTime()}` : 'Record a clip'}</span><kbd>Ctrl+Alt+Shift+R</kbd></button>
+        ${pipSupported() ? `<button class="menu-item ${inPip ? 'active' : ''}" data-cap="pip"><span>${inPip ? 'Close picture-in-picture' : 'Picture-in-picture'}</span><small>Small floating window</small></button>` : ''}
+        <p class="pop-note">Saved to this device's Downloads, with sound. Clips stop by themselves after ${REC_MAX_MIN} minutes.</p>`;
     } else if (kind === 'power') {
       html = `<h4>${esc((S.welcome && S.welcome.appName) || 'Beam Remote')}</h4>
         <button class="menu-item" data-power="disconnect"><span>Disconnect</span><small>PC keeps running</small></button>
@@ -1695,6 +2008,21 @@
       closePop();
     } else if (d.latency) { closePop(); setLatencyMode(d.latency); }
     else if (d.cover) { closePop(); send({ t: 'cover', mode: d.cover }); }
+    else if (d.speed === 'test') runSpeedTest();
+    else if (d.speedUse != null) {
+      const p = S.presets[+d.speedUse];
+      if (p) { applyQuality({ resolution: p.resolution, fps: p.fps, bitrateKbps: p.bitrateKbps }, true); toast(`Quality: ${p.name}`); }
+      closePop();
+    }
+    else if (d.snd === 'toggle') {
+      closePop();
+      setClient('sound', cfg('sound') === false);
+      if (cfg('sound') !== false) { ensureAudio(); playSound(); }
+      toast(cfg('sound') === false ? 'Sound off' : 'Sound on');
+    }
+    else if (d.cap === 'shot') { closePop(); screenshot(); }
+    else if (d.cap === 'rec') { closePop(); toggleRecording(); }
+    else if (d.cap === 'pip') { closePop(); togglePip(); }
     else if (d.padopt === 'vibration') { closePop(); setClient('controllerVibration', cfg('controllerVibration') === false); toast(`Controller vibration ${cfg('controllerVibration') === false ? 'off' : 'on'}`); }
     else if (d.padopt === 'touch') { closePop(); setClient('touchController', cfg('touchController') !== true); }
     else if (d.open) { closePop(); openPanel(d.open); }
@@ -1748,7 +2076,7 @@
   const TAB_KEYS = {
     stream: ['client.latency', 'stream.resolution', 'stream.fps', 'stream.bitrateKbps', 'stream.codec', 'stream.audio', 'stream.contentHint', 'stream.degradation'],
     controls: ['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync', 'client.controllerVibration', 'client.touchController'],
-    display: ['client.scaleMode', 'client.smoothing', 'client.toolbar', 'client.sound'],
+    display: ['client.scaleMode', 'client.smoothing', 'client.toolbar', 'client.sound', 'client.volume', 'client.pauseHidden', 'client.pauseIdle'],
     overlay: ['client.stats', 'client.statsPosition'],
   };
 
@@ -1818,7 +2146,8 @@
       body += `<div class="setting"><label class="switch"><span>Use ⌘ Command as Ctrl (Mac keyboards)</span><input type="checkbox" data-key="client.metaAsCtrl" ${cfg('metaAsCtrl') ? 'checked' : ''}></label></div>`;
       body += `<div class="setting"><label class="title">Shortcuts</label><div class="kv">
         <span>Ctrl+Alt+Shift+M</span><b>Show the toolbar</b><span>Ctrl+Alt+Shift+S</span><b>Cycle the stats overlay</b>
-        <span>Ctrl+Alt+Shift+F</span><b>Full screen</b><span>Esc</span><b>Release a locked mouse</b></div>
+        <span>Ctrl+Alt+Shift+F</span><b>Full screen</b><span>Ctrl+Alt+Shift+P</span><b>Save a screenshot</b>
+        <span>Ctrl+Alt+Shift+R</span><b>Start or stop recording a clip</b><span>Esc</span><b>Release a locked mouse</b></div>
         ${isTouch ? `<p class="help">Touchpad: drag to move · tap to click · double-tap and drag to drag · two-finger tap or long press for right-click · two fingers to scroll · pinch to zoom · three-finger tap for the toolbar.</p>` : ''}</div>`;
     } else if (tab === 'display') {
       body += TAB_KEYS.display.map(settingHtml).join('');
@@ -1964,6 +2293,9 @@
     const key = st.join(',');
     const now = performance.now();
     if (!force && key === p.key && now - p.sentAt < 250) return;
+    const was = p.last;
+    if (was && (st[0] !== was[0] || st.some((v, i) => i > 0 && Math.abs(v - was[i]) > (i < 3 ? 40 : 6000)))) noteUse();
+    p.last = st;
     p.key = key; p.sentAt = now;
     sendInput(['g', index, ++p.seq, ...st], true);
   }

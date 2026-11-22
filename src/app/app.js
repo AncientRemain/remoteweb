@@ -658,7 +658,7 @@
     return `<div class="page-head"><div><h1>Browser controls</h1><p>Starting values for every browser. Each device can change these for itself in its own settings.</p></div></div>
       ${section('Mouse, touch and keyboard', '', fields(['client.mouseMode', 'client.touchMode', 'client.localCursor', 'client.scrollSpeed', 'client.invertScroll', 'client.clipboardSync']))}
       ${section('Picture adjustments', 'Starting values. Each device can change them in its own settings (Picture), with presets. The viewing browser does this, so it costs this PC and the stream nothing.', fields(['client.picBrightness', 'client.picContrast', 'client.picSaturation', 'client.picHue', 'client.picWarmth', 'client.picSharpen']))}
-      ${section('Picture and sound', '', fields(['client.latency', 'client.scaleMode', 'client.smoothing', 'client.sound']))}
+      ${section('Picture and sound', '', fields(['client.latency', 'client.scaleMode', 'client.smoothing', 'client.sound', 'client.volume', 'client.pauseHidden', 'client.pauseIdle']))}
       ${section('Overlay and toolbar', '', fields(['client.stats', 'client.statsPosition', 'client.toolbar']))}
       ${section('Keyboard shortcuts', '', `<div class="card rows kv">${sc.map(([k, v]) => `<div><span class="key"><code>${k}</code></span><span>${v}</span></div>`).join('')}</div>`)}`;
   }

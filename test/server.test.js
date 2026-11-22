@@ -41,7 +41,7 @@ function req(base, method, p, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(p, base);
     const data = body ? Buffer.from(JSON.stringify(body)) : null;
-    const r = http.request({ method, hostname: u.hostname, port: u.port, path: u.pathname, headers: { ...(data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}), ...headers } }, res => {
+    const r = http.request({ method, hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: { ...(data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {}), ...headers } }, res => {
       let text = '';
       res.on('data', c => { text += c; });
       res.on('end', () => { let json = null; try { json = JSON.parse(text); } catch { /* not json */ } resolve({ status: res.statusCode, headers: res.headers, json, text }); });
@@ -289,4 +289,48 @@ test('websocket media: stops behind a slow connection, then asks for a keyframe 
     media(false);
     assert.strictEqual(sent.length, through + 2, 'the picture carries on after the keyframe');
   } finally { s.server.clients.delete(c.id); await s.done(); }
+});
+
+test('websocket media: a paused page gets sound but no picture, then restarts from a keyframe', async () => {
+  const s = await setup();
+  const sent = [];
+  const c = {
+    id: 'pz', transport: 'websocket', latency: 'balanced', rtt: 40, fps: 60,
+    seq: 0, acked: 0, needKey: false, keySeq: 0, keyAskedAt: 0, dropped: 0, sent: 0, bytes: 0,
+    ws: { readyState: 1, send: b => { if (Buffer.isBuffer(b)) { sent.push(b[0] === 1 ? (b[1] ? 'K' : 'v') : 'a'); c.acked = c.seq; } } },
+  };
+  try {
+    const pauses = [], keys = [];
+    s.server.on('pause', x => pauses.push(x.paused));
+    s.server.on('keyframe', () => keys.push(1));
+    s.server.clients.set(c.id, c);
+    const frame = Buffer.alloc(8);
+    s.server.media('video', false, 0, frame, 60);
+    s.server.message(c, { t: 'pause', on: true });
+    s.server.message(c, { t: 'pause', on: true }); // repeated: no change
+    s.server.media('video', false, 0, frame, 60);
+    s.server.media('audio', false, 0, frame, 60);
+    s.server.message(c, { t: 'pause', on: false });
+    assert.strictEqual(c.needKey, true);
+    assert.strictEqual(keys.length, 1, 'a keyframe is asked for on resume');
+    s.server.media('video', false, 0, frame, 60);
+    s.server.media('video', true, 0, frame, 60);
+    s.server.media('video', false, 0, frame, 60);
+    assert.deepStrictEqual(sent, ['v', 'a', 'K', 'v']);
+    assert.deepStrictEqual(pauses, [true, false]);
+  } finally { s.server.clients.delete(c.id); await s.done(); }
+});
+
+test('connection test download: signed-in only, the size asked for, capped', async () => {
+  const s = await setup();
+  try {
+    assert.strictEqual((await req(s.base, 'GET', '/api/speedtest?n=1000')).status, 401);
+    const { token } = await login(s.base);
+    const r = await req(s.base, 'GET', '/api/speedtest?n=300000', { headers: { Authorization: `Bearer ${token}` } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(Number(r.headers['content-length']), 300000);
+    assert.strictEqual(r.headers['cache-control'], 'no-store, no-transform');
+    const big = await req(s.base, 'GET', '/api/speedtest?n=999999999', { headers: { Authorization: `Bearer ${token}` } });
+    assert.strictEqual(Number(big.headers['content-length']), 32 * 1048576);
+  } finally { await s.done(); }
 });

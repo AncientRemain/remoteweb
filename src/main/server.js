@@ -263,6 +263,24 @@ class StreamServer extends EventEmitter {
       this.emit('signin', { ip, tunnel, device: result.session.device });
       return this.json(res, 200, { ok: true, token: result.token }, { 'Set-Cookie': cookie.join('; ') });
     }
+    // Connection test: incompressible bytes to time the download from this PC (signed in only).
+    if (p === '/api/speedtest' && req.method === 'GET') {
+      if (!this.authOf(req).session) return this.json(res, 401, { ok: false });
+      const n = Math.max(1, Math.min(32 * 1048576, Math.floor(Number(url.searchParams.get('n')) || 1048576)));
+      if (!this.noise) this.noise = crypto.randomBytes(1048576);
+      this.headers(res, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store, no-transform', 'Content-Length': String(n) });
+      res.writeHead(200);
+      let left = n;
+      const more = () => {
+        while (left > 0) {
+          const part = this.noise.subarray(0, Math.min(left, this.noise.length));
+          left -= part.length;
+          if (!res.write(part)) { res.once('drain', more); return; }
+        }
+        res.end();
+      };
+      return more();
+    }
     if (p === '/api/logout' && req.method === 'POST') {
       const { token, session } = this.authOf(req);
       if (token) this.auth.logout(token);
@@ -493,6 +511,15 @@ class StreamServer extends EventEmitter {
       case 'cover': if (typeof m.mode === 'string') this.emit('cover', c, m.mode); break;
       case 'update-install': this.emit('update-install', c); break;
       case 'keyframe': this.requestKey(); break;
+      // The page is hidden or nobody is using it: no picture until it's back (sound carries on).
+      case 'pause': {
+        const on = !!m.on;
+        if (on === !!c.paused) break;
+        c.paused = on;
+        if (!on) { c.needKey = true; c.keyAskedAt = 0; this.requestKey(); }
+        this.emit('pause', c);
+        break;
+      }
       // The page's picture stayed frozen through a stream restart: capture the screen afresh.
       case 'recapture': this.emit('recapture', c); break;
       case 'stats':
@@ -534,6 +561,7 @@ class StreamServer extends EventEmitter {
     for (const c of this.clients.values()) {
       if (c.transport !== 'websocket' || !c.ws || c.ws.readyState !== 1) continue;
       c.fps = fps || c.fps;
+      if (kind === 'video' && c.paused) continue;
       const inflight = c.seq - c.acked;
       const slack = c.latency === 'lowest' ? 0.08 : c.latency === 'smooth' ? 0.35 : 0.15;
       const limit = Math.max(3, Math.round(c.fps * (Math.min(c.rtt, 1000) / 1000 + slack)));

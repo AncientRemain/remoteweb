@@ -77,7 +77,7 @@ async function reacquire() {
     for (const peer of peers.values()) {
       for (const t of peer.pc.getTransceivers()) {
         if (t.currentDirection === 'stopped' || !t.sender || t.receiver.track.kind !== 'video') continue;
-        await t.sender.replaceTrack(stream.getVideoTracks()[0] || null).catch(e => log('replaceTrack', e.message));
+        await t.sender.replaceTrack(peer.paused ? null : stream.getVideoTracks()[0] || null).catch(e => log('replaceTrack', e.message));
       }
       applySenderParams(peer);
     }
@@ -528,7 +528,7 @@ function onEncoded(chunk) {
 async function onFrame(frame) {
   const capture = now();
   try {
-    if (!wsClients.size) return;
+    if (!wsClients.size || wsv.idle) return;
     wsv.arrived++;
     if (capture - wsv.lastFrameAt < (1000 / settings.fps) * 0.7) return; // keep to the chosen fps
     const w = frame.displayWidth & ~1, h = frame.displayHeight & ~1;
@@ -676,6 +676,23 @@ host.on('cap:leave', ({ id }) => {
   }
 });
 host.on('cap:keyframe', () => { wsv.needKey = true; });
+// A viewer paused its picture (hidden tab, nobody using it): WebRTC stops sending it video;
+// WebSocket stops encoding while every viewer is paused, and starts again with a keyframe.
+host.on('cap:pause', async ({ id, paused }) => {
+  const peer = peers.get(id);
+  if (!peer) return;
+  peer.paused = !!paused;
+  const track = (media && media.getVideoTracks()[0]) || null;
+  for (const t of peer.pc.getTransceivers()) {
+    if (t.currentDirection === 'stopped' || !t.sender || t.receiver.track.kind !== 'video') continue;
+    await t.sender.replaceTrack(peer.paused ? null : track).catch(e => log('pause replaceTrack', e.message));
+  }
+  if (!peer.paused) applySenderParams(peer);
+});
+host.on('cap:ws-idle', ({ idle }) => {
+  wsv.idle = !!idle;
+  if (!wsv.idle) wsv.needKey = true;
+});
 host.on('cap:reacquire', () => { if (peers.size || wsClients.size) reacquire(); });
 host.on('cap:bitrate-scale', ({ scale }) => {
   const s = Math.max(0.15, Math.min(1, scale));

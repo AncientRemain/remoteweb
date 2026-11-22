@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.8.1.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.9.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -75,8 +75,12 @@ Picture and sound are sent as separate streams, so the browser never delays the 
   - special keys (Windows key, Alt+Tab, Task Manager, arrow pad)
   - clipboard and "type this text"
   - mouse lock for games
-  - sound, the stats overlay, full screen, settings and disconnect
-- **Stats overlay** (`Ctrl + Alt + Shift + S`) shows **ping** (network round trip), **latency** (from the PC's screen to yours), fps, bitrate, packet loss, encode/decode time and the connection route. Choose "Detailed" for graphs.
+  - sound with a volume slider, the stats overlay, full screen, settings and disconnect
+  - capture: screenshot, record a clip, picture-in-picture
+- **Capture** (toolbar → camera button): **Screenshot** (`Ctrl + Alt + Shift + P`) saves the full-resolution picture; **Record a clip** (`Ctrl + Alt + Shift + R`) saves video with sound, up to 10 minutes, as MP4 (WebM where the browser can't make MP4); **Picture-in-picture** keeps the stream playing in a small floating window. Everything is saved to the viewing device's Downloads; the PC doesn't notice.
+- **Pausing**: when the stream's tab is hidden, or nothing has been touched for a while (15 minutes by default; Settings → Display), the PC stops sending the picture and stops encoding it if nobody else is watching. Sound keeps playing; the picture is back at once.
+- **Connection test** (toolbar → Quality → Test my connection): measures the speed of your connection to the PC and suggests the best preset, with "Use it".
+- **Stats overlay** (`Ctrl + Alt + Shift + S`) shows **ping** (network round trip), **latency** (from the PC's screen to yours), fps, bitrate, packet loss, encode/decode time, the connection route and how much data this visit has used. Choose "Detailed" for graphs.
 - **Phones**: touchpad mode (drag to move the cursor, tap to click, two-finger tap for right-click, two fingers to scroll, pinch to zoom) or direct mode (tap where you want to click). Tap the keyboard button to type. Add the page to your home screen for a full-screen app.
 - **Ctrl + V** pastes the text from your device's clipboard into the PC (when clipboard sharing is on).
 - **Picture adjustments** (Settings → Picture): brightness, contrast, saturation, hue, warmth and sharpness, with presets (Vivid, Cinema, Night, High contrast, Crisp text, Grayscale). The viewing browser does this, so it costs the PC and the stream nothing, and each device keeps its own.

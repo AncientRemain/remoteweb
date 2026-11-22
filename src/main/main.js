@@ -364,6 +364,13 @@ function createCaptureWindow() {
 }
 
 function capSend(ch, data) { if (capWin && !capWin.isDestroyed()) capWin.webContents.send(ch, data); }
+// WebSocket encoding rests while every WebSocket viewer has paused its picture.
+let wsIdle = false;
+function updateWsIdle() {
+  const ws = [...server.clients.values()].filter(x => x.transport === 'websocket');
+  const idle = ws.length > 0 && ws.every(x => x.paused);
+  if (idle !== wsIdle) { wsIdle = idle; capSend('cap:ws-idle', { idle }); }
+}
 function pushCaptureConfig() { capSend('cap:config', { settings: live, ice: config.get('network.iceServers') }); updateAudio(); }
 
 // System sound runs only while someone is actually streaming with sound on.
@@ -491,6 +498,7 @@ function wireServer() {
 
   const WHY = { lost: 'connection lost', kicked: 'disconnected from here or replaced', 'signed out': 'signed out', replaced: 'reopened the page', left: 'closed the page' };
   server.on('client-leave', (c, why = 'left') => {
+    setTimeout(updateWsIdle, 0);
     capSend('cap:leave', { id: c.id });
     pads.releaseClient(c.id);
     hostStats.delete(c.id);
@@ -531,6 +539,8 @@ function wireServer() {
     if (m.transport === 'websocket') {
       const codecs = Array.isArray(m.codecs) ? m.codecs.filter(x => ['H264', 'H265', 'VP9', 'AV1', 'VP8'].includes(x)) : [];
       capSend('cap:start-ws', { id: c.id, codecs, latency: c.latency });
+      c.paused = false;
+      updateWsIdle();
       if (lastAudioConfig) server.send(c.id, { t: 'audioconfig', ...lastAudioConfig });
     } else {
       capSend('cap:start-webrtc', { id: c.id, latency: c.latency });
@@ -561,6 +571,12 @@ function wireServer() {
   server.on('signal', (c, data) => capSend('cap:signal', { id: c.id, data }));
   server.on('input', (c, ev) => handleInput(c, ev));
   server.on('keyframe', () => capSend('cap:keyframe'));
+  // A page paused its picture (hidden tab or nobody using it). WebRTC: stop that viewer's video;
+  // WebSocket: when every viewer is paused, stop encoding altogether.
+  server.on('pause', c => {
+    if (c.transport === 'webrtc') capSend('cap:pause', { id: c.id, paused: !!c.paused });
+    updateWsIdle();
+  });
   // A page's picture stayed frozen even after its stream restarted: capture the screen afresh.
   let lastRecapture = 0;
   server.on('recapture', c => {
