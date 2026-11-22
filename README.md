@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.8.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.8.1.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -60,7 +60,7 @@ A new copy asks for an activation code the first time it starts. A code works on
 
 No code? **Ask for access** sends a name and an optional message (plus the PC's name and Windows version, shown before sending). Sellers see the request and unlock it as paid or free, or decline it, and the copy activates by itself.
 
-Seller copies have a **Seller** tab (in red) to make codes, see which ones were used and read how to sell in person. Every copy that existed before 1.8.0 is a seller copy.
+Seller copies have a **Seller** tab (in red) to make codes, see which ones were used and unlock access requests. Every copy that existed before 1.8.0 is a seller copy.
 
 ## Sound
 

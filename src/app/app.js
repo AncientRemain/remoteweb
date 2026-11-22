@@ -814,7 +814,7 @@
   }
 
   // ------------------------------------------------------------ Seller
-  // Selling copies in person. Codes come from the activation server (this PC, for the owner).
+  // Selling copies. Codes come from the activation server (this PC, for the owner).
   // Copies that had the app before copies were paid for can sell, and so can anyone who was
   // given a seller code. Everything a seller needs to know is on this one page.
   const SELL = { data: null, hub: null, busy: false, error: '', status: '', at: 0, showSold: false };
@@ -864,8 +864,8 @@
     const hero = hub
       ? ['This PC is the activation server', 'Every code is made and checked here, and every copy asks this PC once, when it\'s activated. Keep this PC on with remote access running so buyers can activate.']
       : L.founder
-        ? ['Yours is free for good, and you can sell it', 'You had Beam Remote before copies cost money, so nothing changes for you. You can also sell copies to other people: make a code, get paid in person, hand it over.']
-        : ['You have a seller copy', 'You can sell Beam Remote to other people: make a code, get paid in person, hand it over.'];
+        ? ['Yours is free for good, and you can sell it', 'You had Beam Remote before copies cost money, so nothing changes for you. You can also sell copies to other people: make a code, get paid, hand it over.']
+        : ['You have a seller copy', 'You can sell Beam Remote to other people: make a code, get paid, hand it over.'];
 
     let notes = '';
     if (hub && STATUS.tunnel.state !== 'online') notes += note('warn', 'Remote access is off, so nobody can activate a copy or make codes right now. Turn it on in <a href="#" data-page-go="remote">Remote access</a>.');
@@ -880,7 +880,7 @@
     const shownSold = SELL.showSold ? sold : sold.slice(0, 5);
     const list = codes.length
       ? `<div class="card rows codes">${ready.map(row).join('')}${shownSold.map(row).join('')}${sold.length > 5 ? `<div class="more"><button class="btn ghost small" data-action="sell-more">${SELL.showSold ? 'Show fewer' : `Show all ${sold.length} sold`}</button></div>` : ''}</div>`
-      : `<div class="card empty">${d ? 'No codes yet. Make one before you meet someone, or a few at home before you go out.' : SELL.busy || !SELL.at ? 'Asking the activation server…' : 'Your codes show up here once the activation server answers.'}</div>`;
+      : `<div class="card empty">${d ? 'No codes yet. Make one when someone wants a copy.' : SELL.busy || !SELL.at ? 'Asking the activation server…' : 'Your codes show up here once the activation server answers.'}</div>`;
 
     // Access requests: people without a code who asked with their name.
     const reqs = (d && d.requests) || [];
@@ -912,9 +912,8 @@
       ${section('Signing key', '', `<div class="card pad">${note('warn', '<b>license-hub-key.pem</b> in the settings folder is what makes codes work. Keep a copy somewhere safe (there is one in <code>ok\\beam-remote-private</code>) and never share it: anyone who has it could make codes.')}
         <div class="row" style="margin-top:12px"><button class="btn" data-action="open-path" data-which="folder">${icon('folder')}Open settings folder</button></div></div>`)}` : '';
 
-    const tip = (t, p) => `<div class="tip"><b>${t}</b><p>${p}</p></div>`;
     const link = esc(L.downloadUrl || '');
-    return `<div class="page-head"><div><h1>Seller</h1><p>Sell Beam Remote in person for ${price}. Each code unlocks one PC, once.</p></div>
+    return `<div class="page-head"><div><h1>Seller</h1><p>Sell Beam Remote for ${price}. Each code unlocks one PC, once.</p></div>
         <div class="row"><button class="btn" data-action="sell-make" data-count="5">Make 5</button><button class="btn primary" data-action="sell-make" data-count="1">${icon('plus')}Make a code</button></div></div>
       <div class="card sell-hero"><div class="ico">${icon('tag')}</div><div><b>${hero[0]}</b><p>${hero[1]}</p></div></div>
       ${notes ? `<div class="sell-notes">${notes}</div>` : ''}
@@ -925,33 +924,14 @@
       ${hubHtml}
       ${section('How selling works', '', `<div class="card pad"><ol class="steps">
           <li><b>Make a code</b><p>One per buyer, right here. Codes never expire, and each one works once, on one PC.</p></li>
-          <li><b>Get paid first</b><p>${price}, in cash, in person. Count it before you hand anything over.</p></li>
-          <li><b>Give them the link and the code</b><p>The download link is below. Show the code on your screen or write it on paper.</p></li>
+          <li><b>Get paid first</b><p>${price}, before you hand over the code.</p></li>
+          <li><b>Give them the link and the code</b><p>The download link is below, and the code is in your list.</p></li>
           <li><b>They install it and type the code</b><p>On their Windows PC, the first screen asks for it. Once it's used, it shows as Sold here.</p></li>
         </ol></div>`)}
-      ${section('Stay anonymous', 'Nobody needs to know who you are or where this came from.', `<div class="card pad anon">
-          <div class="say"><span class="lbl">If anyone asks where it came from</span><q>I got the link and the app from someone else.</q><p>That's the whole answer. Don't say who: not to friends, not later, not as a joke.</p></div>
-          <ul class="rules">
-            <li><b>Keep your name off it.</b> No names, photos, usernames or school details near the app, the link or the codes.</li>
-            <li><b>Cash only.</b> Payment apps show your real name to the buyer.</li>
-            <li><b>Hand codes over in person.</b> Show your screen or write the code on paper. Don't text, DM or email codes or the link.</li>
-            <li><b>Never post it.</b> No codes, prices, screenshots or links in group chats, stories, servers or anywhere online.</li>
-            <li><b>Don't explain how it works.</b> You don't need to say where activation happens or who keeps it running. "It just works" is enough.</li>
-            <li><b>Don't keep a buyer list.</b> This tab already shows which codes were used, and that's all you need.</li>
-          </ul></div>`)}
-      ${section('Selling in person', '', `<div class="tips">
-          ${tip('Make codes before you go', 'Make a few at home; they never expire. Write each one on its own slip of paper.')}
-          ${tip('Check their PC first', 'They need a Windows 10 or 11 PC at home that can stay on. Macs and Chromebooks can\'t run it, but they can watch and control that PC.')}
-          ${tip('Show, don\'t explain', 'Ten seconds of a stream on your phone sells it better than any description. Close anything personal first.')}
-          ${tip('Money first, code second', `Take the ${price} and count it before you give the code. No IOUs.`)}
-          ${tip('Activate together if you can', 'Then you both know it worked. If their PC is at home, they can type the code later; it doesn\'t expire.')}
-          ${tip('No code on you?', 'They can tap "Ask for access" on their Activate screen and type their name. Unlock it here as paid once they\'ve paid.')}
-          ${tip('If a code doesn\'t work', 'Codes never use 0, O, 1 or I, so check for those first. Still stuck? Cancel it here and make a new one.')}
-          ${tip('Pick a quiet moment', 'Somewhere you can talk without an audience, and not in the middle of class.')}
-        </div>`)}
-      ${section('Download link', 'Give this to buyers in person, or let them scan the QR code from your screen.', `<div class="card"><div class="statusline"><span class="msg mono sell-link">${link}</span><button class="btn small" data-action="copy" data-url="${link}">${icon('copy')}Copy</button><button class="btn small" data-action="qr" data-url="${link}">${icon('qr')}QR code</button></div></div>
+      ${section('Download link', 'Give this to buyers, or let them scan the QR code.', `<div class="card"><div class="statusline"><span class="msg mono sell-link">${link}</span><button class="btn small" data-action="copy" data-url="${link}">${icon('copy')}Copy</button><button class="btn small" data-action="qr" data-url="${link}">${icon('qr')}QR code</button></div></div>
         <p class="sell-fine">Buyers download the installer there, run it on their Windows PC and type their code on the first screen. Windows may warn about an unrecognised app the first time: More info, then Run anyway.</p>`)}
       ${section('Questions', '', `<div class="card faq">
+          <details><summary>A code doesn't work</summary><p>Codes never use 0, O, 1 or I, so check for those first. Still stuck? Cancel it here and make a new one.</p></details>
           <details><summary>It says the code was already used</summary><p>Each code works on one PC only. If it was typed on the wrong PC, there's no undo: they need a new code.</p></details>
           <details><summary>They reinstalled the app or Windows</summary><p>Reinstalling the app on the same PC: the same code works again. A new PC, or a fresh Windows install, counts as a new PC and needs a new code.</p></details>
           <details><summary>What do buyers get?</summary><p>The whole app: their PC's screen in any browser, with sound, mouse, keyboard and controllers, at home or away, plus every update.</p></details>
@@ -1125,7 +1105,7 @@
     cursor: ['cursor', 'mouse'], keys: ['keyboard', 'key'], copy: ['clipboard'], paste: ['clipboard'],
     notification: ['notify'], notifications: ['notify'], log: ['log'], friends: ['domain', 'installer'],
     sell: ['seller', 'code'], selling: ['seller', 'code'], code: ['code', 'activation'], codes: ['code'], license: ['activation', 'code'], activate: ['activation', 'code'],
-    money: ['price', 'paid', 'cash'], price: ['price'], pay: ['paid', 'price', 'cash'], cash: ['cash'], buyer: ['buyer', 'seller'], anonymous: ['anonymous'], secret: ['anonymous'],
+    money: ['price', 'paid'], price: ['price'], pay: ['paid', 'price'], buyer: ['buyer', 'seller'], request: ['request', 'access'], unlock: ['unlock', 'request'],
   };
   let searchIndex = null, searchAt = 0, searchSel = 0, searchHits = [];
   const searchQuery = () => (($('#search') && $('#search').value) || '').trim();

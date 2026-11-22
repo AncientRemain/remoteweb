@@ -414,20 +414,7 @@ pre.term { margin: 0; background: var(--bg); color: var(--text-2); border: 1px s
 .bigcode { padding: 18px 12px; text-align: center; font: 600 26px/1 var(--mono); letter-spacing: .14em; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg); user-select: all; }
 .bigcodes.many .bigcode { padding: 12px 8px; font-size: 17px; }
 
-.anon .say { padding: 14px 16px; margin-bottom: 16px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--border); border-left: 2px solid var(--sell); }
-.anon .say .lbl { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-3); }
-.anon .say q { display: block; font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
-.anon .say p { margin: 6px 0 0; color: var(--text-2); }
-.rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
-.rules li { position: relative; padding-left: 20px; color: var(--text-2); line-height: 1.55; }
-.rules li::before { content: ""; position: absolute; left: 3px; top: 8px; width: 6px; height: 6px; border-radius: 1px; background: var(--sell); }
-.rules li b { color: var(--text); font-weight: 600; }
 
-.tips { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-@media (max-width: 1050px) { .tips { grid-template-columns: 1fr; } }
-.tip { padding: 13px 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-.tip b { display: block; margin-bottom: 3px; font-weight: 600; }
-.tip p { margin: 0; font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
 
 .sell-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; color: var(--text) !important; }
 .sell-fine { margin: 8px 2px 0; font-size: 12px; color: var(--text-3); line-height: 1.5; }
