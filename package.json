@@ -1,7 +1,7 @@
 {
   "name": "beam-remote",
   "productName": "Beam Remote",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "description": "Stream and control your whole PC from any web browser, at home or away.",
   "main": "src/main/main.js",
   "author": "Beam Remote",
@@ -11,7 +11,7 @@
     "start": "electron .",
     "icons": "node scripts/make-icon.js",
     "build:audio": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /nologo /optimize /target:exe /out:assets\\beam-audio.exe tools\\beam-audio\\Program.cs",
-    "test": "node --test test/core.test.js test/cloudflare.test.js test/audio.test.js test/server.test.js test/gamepad.test.js",
+    "test": "node --test test/core.test.js test/cloudflare.test.js test/audio.test.js test/server.test.js test/gamepad.test.js test/license.test.js",
     "dist": "electron-builder --win nsis",
     "dist:dir": "electron-builder --win --dir",
     "release": "node scripts/release.js",

@@ -4,7 +4,7 @@ Stream your whole Windows PC to any web browser (phone, tablet, laptop, another 
 
 ## Install
 
-Run **`Beam-Remote-Setup-1.7.1.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
+Run **`Beam-Remote-Setup-1.8.0.exe`** (from the [releases page](https://github.com/AncientRemain/remoteweb/releases) or `dist/`). It installs for your Windows account only (no admin needed) and adds Desktop and Start-menu shortcuts. After that it keeps itself up to date (see "Updates").
 
 Windows may say "Windows protected your PC" because the app isn't code-signed. Click **More info → Run anyway**.
 
@@ -50,9 +50,17 @@ The app checks [github.com/AncientRemain/remoteweb](https://github.com/AncientRe
 - **Download, then ask me**: the Home page and the tray show "Restart and update" when it's ready.
 - **Just tell me** / **Off**.
 
-Nothing is downloaded or installed while someone is streaming. A page that is open during an update says so and reconnects by itself.
+Nothing is downloaded or installed while someone is streaming. A page that is open during an update says so and reconnects by itself, then reloads itself once into the new version (staying signed in), so open pages always run the newest page code. Pages opened before 1.7.2 need one reload by hand.
 
 When a new version is out you hear about it, whatever the mode: a Windows notification (once per version), a banner on Home, an item in the tray menu, and a notice for anyone connected to the stream page, who can install it from Settings → About.
+
+## Activation and selling
+
+A new copy asks for an activation code the first time it starts. A code works once, on one PC; after that the copy keeps working, offline too, for good. Copies set up before 1.8.0 never need a code.
+
+No code? **Ask for access** sends a name and an optional message (plus the PC's name and Windows version, shown before sending). Sellers see the request and unlock it as paid or free, or decline it, and the copy activates by itself.
+
+Seller copies have a **Seller** tab (in red) to make codes, see which ones were used and read how to sell in person. Every copy that existed before 1.8.0 is a seller copy.
 
 ## Sound
 

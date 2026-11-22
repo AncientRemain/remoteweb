@@ -29,6 +29,7 @@ const CSP_BASE = [
 const COOKIE = 'beam_sid';
 const HEADER = 14;          // binary frame header: type u8, flags u8, seq u32, capture time f64
 const GRACE_MS = 25000;     // a dropped session waits this long for its page to come back
+const NOT_ACTIVATED = 'This copy of Beam Remote isn\'t activated yet. Open the app on the PC and enter its activation code.';
 const KEY_GAP_MS = 250;     // keyframe requests closer together than this share one keyframe
 const KEY_RETRY_MS = 400;   // a page still waiting for a keyframe asks again after this long
 const HELLO_MS = 4000;      // time a new socket gets to say hello
@@ -107,6 +108,10 @@ class StreamServer extends EventEmitter {
     this.recentFails = [];
     this.wss = new WebSocketServer({ noServer: true, maxPayload: 4 << 20, perMessageDeflate: false });
     this.lastKeyRequest = 0;
+    // Paid copies (license.js): an unactivated copy serves its page but nobody can sign in,
+    // and the owner's copy answers other copies' activation requests.
+    this.isActivated = () => true;
+    this.licenseHub = null;
     this.status = { http: null, https: null, error: null };
     this.timers = [setInterval(() => this.beat(), HEARTBEAT_MS), setInterval(() => this.tick(), TICK_MS)];
   }
@@ -211,7 +216,7 @@ class StreamServer extends EventEmitter {
     const a = this.config.get('appearance');
     return {
       appName: a.appName, welcomeText: a.welcomeText, appearance: a, version: this.version,
-      setup: this.auth.passwordSet, totp: this.auth.totpEnabled,
+      setup: this.auth.passwordSet, totp: this.auth.totpEnabled, activated: this.isActivated(),
     };
   }
 
@@ -228,7 +233,15 @@ class StreamServer extends EventEmitter {
     if (p === '/api/info' && req.method === 'GET') {
       return this.json(res, 200, { ...this.info(), signedIn: !!this.authOf(req).session });
     }
+    // Other copies activating, founders asking to sell, sellers making codes (owner's PC only).
+    if (p.startsWith('/api/license/') && req.method === 'POST') {
+      if (!this.licenseHub) return this.json(res, 404, { ok: false, error: 'No activation server here.' });
+      let body;
+      try { body = await readBody(req, 16384); } catch { return this.json(res, 413, { ok: false }); }
+      return this.json(res, 200, this.licenseHub.handle(p.slice('/api/license/'.length), body, ip));
+    }
     if (p === '/api/login' && req.method === 'POST') {
+      if (!this.isActivated()) return this.json(res, 200, { ok: false, error: NOT_ACTIVATED });
       if (!this.sameOrigin(req) && !this.embedOrigins().length) return this.json(res, 403, { ok: false, error: 'Blocked: request came from another website.' });
       let body;
       try { body = await readBody(req); } catch { return this.json(res, 413, { ok: false }); }
@@ -319,6 +332,11 @@ class StreamServer extends EventEmitter {
 
   // A new socket must say hello (or, for older pages, be signed in by cookie) before anything else.
   greet(ws, meta) {
+    if (!this.isActivated()) {
+      try { ws.send(JSON.stringify({ t: 'auth-failed', message: NOT_ACTIVATED })); } catch { /* ignore */ }
+      try { ws.close(4403, 'Not activated'); } catch { /* ignore */ }
+      return;
+    }
     this.pending.add(ws);
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });

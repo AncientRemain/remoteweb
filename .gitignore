@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.log
+
+# Activation server signing key: never commit
+*.pem
+license-hub*.json

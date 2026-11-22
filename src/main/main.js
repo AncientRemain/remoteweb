@@ -37,6 +37,7 @@ const { Updater } = require('./updater');
 const { PrivacyScreen, LABELS: COVER_LABELS } = require('./cover');
 const boost = require('./boost');
 const { Gamepads, installDriver: installPadDriver } = require('./gamepad');
+const { License } = require('./license');
 const QRCode = require('qrcode');
 
 const APP_DIR = path.join(__dirname, '..', '..');
@@ -49,7 +50,7 @@ const startHidden = process.argv.includes('--hidden') || justUpdated;
 // BEAM_DEBUG=1 writes step-by-step markers to debug.log in the data folder (always written, even if the app hangs).
 const dbg = (...a) => { if (process.env.BEAM_DEBUG) try { fs.appendFileSync(path.join(app.getPath('userData'), 'debug.log'), `${new Date().toISOString().slice(11, 23)} ${a.join(' ')}\n`); } catch { /* ignore */ } };
 
-let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater, cover, pads;
+let config, auth, server, tunnel, tray, win, capWin, sysAudio, updater, cover, pads, license;
 let firewall = { state: 'unknown' };
 let live = null;              // stream settings in use right now (config + browser changes)
 let capInfo = {};
@@ -89,6 +90,19 @@ async function boot() {
   config = new ConfigStore(USER_DIR);
   config.watch();
   auth = new Auth(USER_DIR, p => config.get(p));
+  // Paid copies (license.js): activated, a founder, a seller, or the owner's activation server.
+  // The test switches only work when running from source, never in the installed app.
+  const dev = !app.isPackaged;
+  license = new License({
+    dir: USER_DIR, log: dbg,
+    onHubEvent: text => auth.record('license', text),
+    ...(dev && process.env.BEAM_LICENSE_HUB ? { hubUrl: process.env.BEAM_LICENSE_HUB } : {}),
+    ...(dev && process.env.BEAM_LICENSE_PUBKEY ? { publicKey: process.env.BEAM_LICENSE_PUBKEY } : {}),
+    ...(dev && process.env.BEAM_LICENSE_CUTOFF ? { cutoff: Date.parse(process.env.BEAM_LICENSE_CUTOFF) } : {}),
+  });
+  license.load();
+  dbg('license', license.kind);
+  license.on('change', () => sendToWindow('beam:state', state()));
   ensureCustomCss();
   resetLive();
 
@@ -103,6 +117,21 @@ async function boot() {
   server = new StreamServer({
     config, auth, webDir: WEB_DIR, assetsDir: ASSETS, userDir: USER_DIR, version: VERSION, getWelcome: welcomeFor,
   });
+  server.isActivated = () => license.activated;
+  server.licenseHub = license.hub;
+  // Copies set up before paid copies existed ask the activation server to let them sell.
+  const askToSell = () => { if (license.kind === 'founder') license.registerFounder(); };
+  setTimeout(askToSell, 6000);
+  setInterval(askToSell, 10 * 60000);
+  // Access requests: a copy waiting to be unlocked checks every 20 s; sellers look for new
+  // requests every few minutes; the owner's PC hears about them the moment they arrive.
+  setInterval(() => { if (license.kind === 'none') license.checkRequest(); }, 20000);
+  setInterval(() => { if (license.kind === 'seller') license.seller('info').catch(() => {}); }, 3 * 60000);
+  setTimeout(() => { if (license.kind === 'seller') license.seller('info').catch(() => {}); }, 15000);
+  const appName = () => config.get('appearance.appName');
+  license.on('request', r => notifyPc(`${appName()}: ${r.name} is asking for access`, r.message ? `"${r.message}" Unlock it as paid or free in the Seller tab.` : 'Unlock it as paid or free in the Seller tab.', openSeller));
+  license.on('requests', list => notifyPc(`${appName()}: ${list.length === 1 ? `${list[0].name} is asking for access` : `${list.length} people are asking for access`}`, 'Unlock as paid or free in the Seller tab.', openSeller));
+  license.on('unlocked', () => notifyPc(`${appName()} is unlocked`, 'Your copy is ready. Open the app to finish setting it up.', showWindow));
   // Game controllers -> virtual Xbox controllers (helper + driver; see gamepad.js).
   pads = new Gamepads({ exe: path.join(ASSETS, 'beam-pad.exe').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`), log: dbg });
   pads.on('pad', p => server.send(p.clientId, { t: 'pad', i: p.index, player: p.player || 0, error: p.error || null }));
@@ -596,6 +625,22 @@ function openUpdates() {
   setTimeout(() => sendToWindow('beam:goto', { page: 'app', target: 'update-box' }), 400);
 }
 
+function openSeller() {
+  showWindow();
+  setTimeout(() => sendToWindow('beam:goto', { page: 'seller', target: 'requests' }), 400);
+}
+
+// A Windows notification, unless the app's window is in front (it shows there already).
+function notifyPc(title, body, onClick) {
+  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) return;
+  if (process.env.BEAM_NO_NOTIFY) { dbg('[notify]', title, '|', body); return; } // tests: nothing on screen
+  try {
+    const n = new Notification({ title, body, icon: path.join(ASSETS, 'icon.png') });
+    if (onClick) n.on('click', onClick);
+    n.show();
+  } catch { /* notifications unavailable */ }
+}
+
 function onUpdateStatus(u) {
   updateTray();
   sendToWindow('beam:status', status());
@@ -836,6 +881,10 @@ function applyLoginItem() {
 
 // ------------------------------------------------------------------ tunnel
 function startTunnel() {
+  if (!license.activated) {
+    sendToWindow('beam:toast', { kind: 'error', text: 'Activate this copy first. Remote access stays off until it is.' });
+    return;
+  }
   if (!auth.passwordSet) {
     sendToWindow('beam:toast', { kind: 'error', text: 'Choose a password first. Remote access stays off until the PC is protected.' });
     return;
@@ -958,6 +1007,7 @@ function state() {
     inputError: input.available() ? null : input.loadError(),
     packaged: app.isPackaged,
     coverSupported: cover ? cover.supported : false,
+    license: license ? license.public() : { kind: 'none', activated: false, canSell: false },
   };
 }
 
@@ -1229,5 +1279,22 @@ handle('beam:padDriverInstall', async () => {
   return { ok: pads.driver === 'ready', driver: pads.driver };
 });
 handle('beam:padRecheck', () => { pads.recheck(); return true; });
+// Paid copies: activate this copy, make and cancel codes, and (owner's PC) run the activation server.
+handle('beam:licenseActivate', async code => {
+  const r = await license.activate(code);
+  if (r.ok) {
+    auth.record('license', `This copy was activated as a ${r.kind === 'seller' ? 'seller copy' : 'normal copy'}.`);
+    sendToWindow('beam:state', state());
+  }
+  return r;
+});
+handle('beam:sellerCodes', (action, extra) => license.seller(String(action || 'info'), extra || {}));
+handle('beam:licenseRequest', opts => license.requestAccess(opts || {}));
+handle('beam:licenseCheckRequest', async () => { await license.checkRequest(); return license.public(); });
+handle('beam:licenseCancelRequest', () => license.cancelRequest());
+handle('beam:hubOverview', () => (license.hub ? license.hub.overview() : null));
+handle('beam:hubSeller', (sid, changes) => (license.hub ? license.hub.setSeller(String(sid), changes || {}) : false));
+handle('beam:hubSettings', changes => (license.hub ? license.hub.setSettings(changes || {}) : null));
+handle('beam:hubPending', (pc, allow) => (license.hub ? (allow ? license.hub.allowPending(String(pc)) : license.hub.dismissPending(String(pc))) : false));
 handle('beam:firewallFix', () => fixFirewall());
 handle('beam:quit', () => { quit(); return true; });

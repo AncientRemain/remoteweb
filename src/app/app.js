@@ -31,6 +31,9 @@
     alert: '<path d="M12 3l9.5 16.5h-19z"/><path d="M12 10v4M12 17h.01"/>',
     check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16 9.8"/>',
     gamepad: '<path d="M6 12h4M8 10v4"/><path d="M15 13h.01M18 11h.01"/><path d="M17.3 6H6.7a4 4 0 0 0-4 3.6l-.9 7.1a2.5 2.5 0 0 0 4.6 1.6L7.5 17h9l1.1 1.3a2.5 2.5 0 0 0 4.6-1.6l-.9-7.1a4 4 0 0 0-4-3.6z"/>',
+    tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    key: '<circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8L20 3M16.5 6.5l3 3M14.5 8.5l2 2"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>',
   };
   const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
@@ -46,12 +49,14 @@
 
   // id, name, icon, sidebar group
   const PAGES = [
-    ['home', 'Home', 'home', 'Overview'], ['guide', 'Setup guide', 'book', 'Overview'],
+    ['home', 'Home', 'home', 'Overview'], ['seller', 'Seller', 'tag', 'Overview'], ['guide', 'Setup guide', 'book', 'Overview'],
     ['remote', 'Remote access', 'globe', 'Connect'], ['security', 'Security & privacy', 'shield', 'Connect'],
     ['quality', 'Stream quality', 'gauge', 'Stream'], ['controllers', 'Controllers', 'gamepad', 'Stream'], ['browser', 'Browser controls', 'laptop', 'Stream'],
     ['appearance', 'Appearance', 'palette', 'App'], ['app', 'App & updates', 'cog', 'App'],
   ];
   const pageName = id => (PAGES.find(p => p[0] === id) || [])[1] || '';
+  // The Seller tab only exists on copies that can sell.
+  const visiblePages = () => PAGES.filter(([id]) => id !== 'seller' || (ST && ST.license && ST.license.canSell));
 
   function toast(text, kind = '') {
     const t = document.createElement('div');
@@ -91,13 +96,19 @@
       applyTheme();
       renderNav();
       if (!editing()) render();
+      // The activation window follows: unlocked by someone, or the request was turned down.
+      if (ACT.open && ST.license) {
+        if (ST.license.activated) activatedNow('Unlocked. Your copy is ready.');
+        else if (ACT.mode === 'wait' && ST.license.request && ST.license.request.status !== 'pending') drawActivate('declined');
+      }
     });
     beam.onLog(e => {
       ST.log = [e, ...(ST.log || [])].slice(0, 100);
       if (page === 'security') { const box = $('#seclog'); if (box) box.innerHTML = logHtml(); }
     });
     beam.onToast(t => toast(t.text, t.kind));
-    if (!ST.auth.passwordSet) openWizard();
+    if (ST.license && !ST.license.activated) openActivate();
+    else if (!ST.auth.passwordSet) openWizard();
   }
 
   function editing() {
@@ -115,7 +126,7 @@
     const tdot = t.state === 'online' ? 'good' : t.state === 'error' ? 'bad' : t.state === 'stopped' ? '' : 'warn';
     const upd = STATUS && STATUS.update && ['available', 'downloading', 'ready'].includes(STATUS.update.state);
     let group = '';
-    return PAGES.map(([id, label, ic, g]) => `${g !== group ? `<div class="nav-group">${(group = g)}</div>` : ''}<button class="nav-item ${id === page && !searchQuery() ? 'active' : ''}" data-page="${id}">${icon(ic)}<span>${esc(label)}</span>${id === 'home' && n ? `<span class="count live">${n}</span>` : ''}${id === 'guide' && left ? `<span class="count">${left}</span>` : ''}${id === 'app' && upd ? '<span class="count live" title="Update available">1</span>' : ''}</button>`).join('')
+    return visiblePages().map(([id, label, ic, g]) => `${g !== group ? `<div class="nav-group">${(group = g)}</div>` : ''}<button class="nav-item ${id === 'seller' ? 'seller' : ''} ${id === page && !searchQuery() ? 'active' : ''}" data-page="${id}">${icon(ic)}<span>${esc(label)}</span>${id === 'home' && n ? `<span class="count live">${n}</span>` : ''}${id === 'guide' && left ? `<span class="count">${left}</span>` : ''}${id === 'app' && upd ? '<span class="count live" title="Update available">1</span>' : ''}${id === 'seller' && ST.license && ST.license.waiting ? `<span class="count" title="People asking for access">${ST.license.waiting}</span>` : ''}</button>`).join('')
       + `<div class="spacer"></div><div class="side-foot">
         <div class="line"><span class="dot ${STATUS && STATUS.server.http ? 'good' : 'bad'}"></span>${STATUS && STATUS.server.http ? `Serving on port ${STATUS.server.http}` : 'Web server stopped'}</div>
         <div class="line"><span class="dot ${tdot}"></span>${tunnelLine}</div>
@@ -140,14 +151,16 @@
 
   function render() {
     if (searchQuery()) { renderSearch(); return; }
+    if (!visiblePages().some(p => p[0] === page)) page = 'home';
     const fn = PAGE_FNS()[page];
-    $('#main').innerHTML = `<div class="page">${fn()}</div>`;
+    $('#main').innerHTML = `<div class="page ${page === 'seller' ? 'seller' : ''}">${fn()}</div>`;
     afterRender();
   }
 
   function afterRender() {
     if (page === 'home') drawSparks();
     if (page === 'appearance') updatePreview();
+    if (page === 'seller') loadSell();
   }
 
   function onStatus() {
@@ -238,6 +251,18 @@
 
   $('#main').addEventListener('change', async e => {
     const t = e.target;
+    // Seller tab, owner's PC: activation server settings and sellers' names.
+    if (t.dataset.hub) {
+      await beam.hubSettings({ [t.dataset.hub]: t.type === 'checkbox' ? t.checked : t.value });
+      SELL.hub = await beam.hubOverview();
+      toast('Saved', 'ok');
+      return;
+    }
+    if (t.dataset.hubLabel) {
+      await beam.hubSeller(t.dataset.hubLabel, { label: t.value.trim() });
+      toast('Saved', 'ok');
+      return;
+    }
     const key = t.dataset.key;
     if (!key || t.dataset.json) return;
     const r = ST.schema[key];
@@ -715,6 +740,7 @@
     const cpu = STATUS.cpu ? `${fmt(STATUS.cpu.total, 1)}%` : '–';
     const kv = (k, v) => `<div><span class="key">${k}</span><span>${v}</span></div>`;
     return `<div class="page-head"><div><h1>App &amp; updates</h1><p>How the app runs on this PC: startup, updates, the web server and diagnostics.</p></div></div>
+      ${section('Activation', '', activationHtml())}
       ${section('App', '', fields(['app.startWithWindows', 'app.startMinimized', 'app.closeToTray', 'app.keepAwake', 'app.streamPriority']))}
       ${section('Updates', 'New versions come from github.com/AncientRemain/remoteweb. Nothing is downloaded while someone is streaming.',
         `<div class="card"><div id="update-box">${updateHtml()}</div>${fieldHtml('app.updates')}</div>`)}
@@ -787,7 +813,296 @@
       </div>`)}`;
   }
 
-  const PAGE_FNS = () => ({ home: pageHome, remote: pageRemote, quality: pageQuality, security: pageSecurity, controllers: pageControllers, browser: pageBrowser, appearance: pageAppearance, app: pageApp, guide: pageGuide });
+  // ------------------------------------------------------------ Seller
+  // Selling copies in person. Codes come from the activation server (this PC, for the owner).
+  // Copies that had the app before copies were paid for can sell, and so can anyone who was
+  // given a seller code. Everything a seller needs to know is on this one page.
+  const SELL = { data: null, hub: null, busy: false, error: '', status: '', at: 0, showSold: false };
+  const day = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  async function loadSell(force) {
+    if (SELL.busy || (!force && SELL.at && Date.now() - SELL.at < 8000)) return;
+    SELL.busy = true;
+    try {
+      const hub = ST.license && ST.license.kind === 'hub';
+      const [d, h] = await Promise.all([beam.sellerCodes('info'), hub ? beam.hubOverview() : Promise.resolve(null)]);
+      takeSell(d);
+      SELL.hub = h;
+    } catch (e) {
+      SELL.error = 'Something went wrong. Try again.';
+    } finally { SELL.busy = false; SELL.at = Date.now(); }
+    if (page === 'seller' && !editing() && !searchQuery()) render();
+  }
+  function takeSell(d) {
+    if (d && Array.isArray(d.codes)) SELL.data = d;
+    SELL.error = d && !d.ok ? d.error || 'Something went wrong.' : '';
+    SELL.status = (d && d.status) || '';
+  }
+
+  function sellersHtml(H) {
+    const pending = H.pending.map(p => `<div>
+        <span class="name"><span class="faint">Waiting</span></span>
+        <span class="what">A copy set up ${p.since ? day(p.since) : 'at an unknown time'} asked to sell on ${day(p.at)}</span>
+        <span class="acts"><button class="btn small primary" data-action="hub-pending" data-pc="${esc(p.pc)}" data-allow="1">Allow</button><button class="btn small ghost" data-action="hub-pending" data-pc="${esc(p.pc)}" data-allow="0">Dismiss</button></span></div>`).join('');
+    const rows = H.sellers.map(s => `<div class="${s.blocked ? 'off' : ''}">
+        <span class="name"><input class="input" data-hub-label="${esc(s.sid)}" value="${esc(s.label)}" placeholder="${esc(s.sid)}" maxlength="40" aria-label="Name for ${esc(s.sid)}"></span>
+        <span class="what">${s.kind === 'founder' ? 'Had it before it was paid for' : 'Seller code'} · since ${day(s.at)}${s.blocked ? ' · <b class="bad">turned off</b>' : ''}</span>
+        <span class="nums">${s.sold + s.paid} sold · ${s.free} free · ${Math.max(0, s.made - s.sold)} ready</span>
+        <span class="acts"><button class="btn small ${s.blocked ? '' : 'danger'}" data-action="hub-seller" data-sid="${esc(s.sid)}" data-blocked="${s.blocked ? '0' : '1'}">${s.blocked ? 'Turn back on' : 'Turn off'}</button></span></div>`).join('');
+    if (!pending && !rows) return '<div class="card empty">No sellers yet. Copies that had Beam Remote before it was paid for show up here once they update, and so does anyone you give a seller code.</div>';
+    return `<div class="card rows sellers">${pending}${rows}</div>`;
+  }
+
+  function pageSeller() {
+    const L = ST.license || {};
+    const hub = L.kind === 'hub';
+    const d = SELL.data;
+    const price = esc((d && d.price) || (SELL.hub && SELL.hub.settings.price) || '$20');
+    const codes = d ? d.codes : [];
+    const ready = codes.filter(c => !c.used), sold = codes.filter(c => c.used);
+
+    const hero = hub
+      ? ['This PC is the activation server', 'Every code is made and checked here, and every copy asks this PC once, when it\'s activated. Keep this PC on with remote access running so buyers can activate.']
+      : L.founder
+        ? ['Yours is free for good, and you can sell it', 'You had Beam Remote before copies cost money, so nothing changes for you. You can also sell copies to other people: make a code, get paid in person, hand it over.']
+        : ['You have a seller copy', 'You can sell Beam Remote to other people: make a code, get paid in person, hand it over.'];
+
+    let notes = '';
+    if (hub && STATUS.tunnel.state !== 'online') notes += note('warn', 'Remote access is off, so nobody can activate a copy or make codes right now. Turn it on in <a href="#" data-page-go="remote">Remote access</a>.');
+    if (!hub && SELL.error) notes += note(SELL.status === 'offline' ? 'warn' : 'bad', esc(SELL.error));
+    if (!hub && d && d.note) notes += note('info', `<b>Message for sellers</b><br>${esc(d.note).replace(/\n/g, '<br>')}`);
+
+    const row = c => `<div class="${c.used ? 'sold' : ''}">
+        <span class="code">${esc(c.code)}</span>
+        <span class="state"><span class="dot ${c.used ? 'good' : ''}"></span>${c.used ? 'Sold' : 'Ready'}</span>
+        <span class="when">${c.used ? `Activated ${day(c.used)}` : `Made ${day(c.at)}`}${c.kind === 'seller' ? ' · seller code' : ''}</span>
+        <span class="acts">${c.used ? '' : `<button class="icon-btn" title="Copy" aria-label="Copy ${esc(c.code)}" data-action="sell-copy" data-code="${esc(c.code)}">${icon('copy')}</button><button class="icon-btn" title="Cancel this code" aria-label="Cancel ${esc(c.code)}" data-action="sell-cancel" data-code="${esc(c.code)}">${icon('trash')}</button>`}</span></div>`;
+    const shownSold = SELL.showSold ? sold : sold.slice(0, 5);
+    const list = codes.length
+      ? `<div class="card rows codes">${ready.map(row).join('')}${shownSold.map(row).join('')}${sold.length > 5 ? `<div class="more"><button class="btn ghost small" data-action="sell-more">${SELL.showSold ? 'Show fewer' : `Show all ${sold.length} sold`}</button></div>` : ''}</div>`
+      : `<div class="card empty">${d ? 'No codes yet. Make one before you meet someone, or a few at home before you go out.' : SELL.busy || !SELL.at ? 'Asking the activation server…' : 'Your codes show up here once the activation server answers.'}</div>`;
+
+    // Access requests: people without a code who asked with their name.
+    const reqs = (d && d.requests) || [];
+    const handled = (d && d.handled) || [];
+    const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : day(t); };
+    const reqRow = r => `<div class="req">
+        <div class="who"><b>${esc(r.name)}</b>${r.message ? `<q>${esc(r.message)}</q>` : ''}<span class="meta">${esc(r.pcName || 'Unknown PC')} · ${esc(r.os || 'Windows')} · ${ago(r.at)}</span></div>
+        <div class="acts"><button class="btn small primary" data-action="req-unlock" data-id="${esc(r.id)}" data-reason="paid">Unlock as paid</button><button class="btn small" data-action="req-unlock" data-id="${esc(r.id)}" data-reason="free">Unlock for free</button><button class="btn small ghost" data-action="req-decline" data-id="${esc(r.id)}">Decline</button></div></div>`;
+    const doneRow = r => `<div class="req done">
+        <div class="who"><b>${esc(r.name)}</b><span class="meta">${r.status === 'unlocked' ? `Unlocked · <b class="${r.reason === 'free' ? 'muted' : 'good'}">${r.reason}</b>` : 'Declined'} · by ${hub ? esc(r.by) : 'you'} · ${day(r.doneAt)}</span></div></div>`;
+    const reqHelp = 'People without a code can ask from their Activate screen with their name. Unlock as paid once they\'ve paid you, or for free if you\'re giving it away.';
+    const requestsHtml = `<div id="requests">${section('Requests', reqs.length ? `${reqs.length} waiting. ${reqHelp}` : reqHelp,
+      `${reqs.length ? `<div class="card rows reqs">${reqs.map(reqRow).join('')}</div>` : '<div class="card empty">Nobody is waiting right now.</div>'}
+      ${handled.length ? `<div class="req-history">${SELL.showHandled ? `<div class="card rows reqs">${handled.map(doneRow).join('')}</div>` : ''}<button class="btn ghost small" data-action="req-history">${SELL.showHandled ? 'Hide past requests' : `Past requests (${handled.length})`}</button></div>` : ''}`)}</div>`;
+
+    const H = SELL.hub;
+    const hubHtml = hub && H ? `
+      ${section('At a glance', '', `<div class="card"><div class="stats">
+        <div class="stat"><span class="l">Copies sold</span><span class="v">${H.totals.sold}</span></div>
+        <div class="stat"><span class="l">Given free</span><span class="v">${H.totals.free}</span></div>
+        <div class="stat"><span class="l">Codes ready</span><span class="v">${H.totals.ready}</span></div>
+        <div class="stat"><span class="l">Waiting for you</span><span class="v">${H.totals.waiting}</span></div></div></div>`)}
+      ${section('Sellers', 'Everyone who can make codes. The names are only for you; sellers never see them.', sellersHtml(H))}
+      ${section('Seller settings', '', `<div class="card">
+        <div class="field"><div class="lab"><b>Price</b><p>Shown to every seller.</p></div><div class="ctl"><input class="input" data-hub="price" value="${esc(H.settings.price)}" maxlength="20"></div></div>
+        <div class="field wide"><div class="lab"><b>Message for sellers</b><p>Shown at the top of every seller's tab. Leave it empty for none.</p></div><div class="ctl"><textarea class="plain" data-hub="note" rows="3" maxlength="600" placeholder="e.g. Keep $5 of every sale.">${esc(H.settings.note)}</textarea></div></div>
+        <div class="field"><div class="lab"><b>Let earlier copies sell by themselves</b><p>Copies set up before paid copies existed become sellers as soon as they update. Turn this off to approve each one here instead.</p></div><div class="ctl"><input type="checkbox" class="switch" data-hub="autoFounders" ${H.settings.autoFounders ? 'checked' : ''}></div></div>
+      </div>`)}
+      ${section('Signing key', '', `<div class="card pad">${note('warn', '<b>license-hub-key.pem</b> in the settings folder is what makes codes work. Keep a copy somewhere safe (there is one in <code>ok\\beam-remote-private</code>) and never share it: anyone who has it could make codes.')}
+        <div class="row" style="margin-top:12px"><button class="btn" data-action="open-path" data-which="folder">${icon('folder')}Open settings folder</button></div></div>`)}` : '';
+
+    const tip = (t, p) => `<div class="tip"><b>${t}</b><p>${p}</p></div>`;
+    const link = esc(L.downloadUrl || '');
+    return `<div class="page-head"><div><h1>Seller</h1><p>Sell Beam Remote in person for ${price}. Each code unlocks one PC, once.</p></div>
+        <div class="row"><button class="btn" data-action="sell-make" data-count="5">Make 5</button><button class="btn primary" data-action="sell-make" data-count="1">${icon('plus')}Make a code</button></div></div>
+      <div class="card sell-hero"><div class="ico">${icon('tag')}</div><div><b>${hero[0]}</b><p>${hero[1]}</p></div></div>
+      ${notes ? `<div class="sell-notes">${notes}</div>` : ''}
+      ${reqs.length ? requestsHtml : ''}
+      ${section('Your codes', d ? `${ready.length} ready to sell · ${sold.length} sold${d.unlocked && (d.unlocked.paid || d.unlocked.free) ? ` · ${d.unlocked.paid} unlocked as paid, ${d.unlocked.free} free` : ''}` : '', list,
+        `${hub ? '<button class="btn ghost small" data-action="sell-make" data-count="1" data-kind="seller">Make a seller code</button>' : ''}<button class="btn ghost small" data-action="sell-refresh">Refresh</button>`)}
+      ${reqs.length ? '' : requestsHtml}
+      ${hubHtml}
+      ${section('How selling works', '', `<div class="card pad"><ol class="steps">
+          <li><b>Make a code</b><p>One per buyer, right here. Codes never expire, and each one works once, on one PC.</p></li>
+          <li><b>Get paid first</b><p>${price}, in cash, in person. Count it before you hand anything over.</p></li>
+          <li><b>Give them the link and the code</b><p>The download link is below. Show the code on your screen or write it on paper.</p></li>
+          <li><b>They install it and type the code</b><p>On their Windows PC, the first screen asks for it. Once it's used, it shows as Sold here.</p></li>
+        </ol></div>`)}
+      ${section('Stay anonymous', 'Nobody needs to know who you are or where this came from.', `<div class="card pad anon">
+          <div class="say"><span class="lbl">If anyone asks where it came from</span><q>I got the link and the app from someone else.</q><p>That's the whole answer. Don't say who: not to friends, not later, not as a joke.</p></div>
+          <ul class="rules">
+            <li><b>Keep your name off it.</b> No names, photos, usernames or school details near the app, the link or the codes.</li>
+            <li><b>Cash only.</b> Payment apps show your real name to the buyer.</li>
+            <li><b>Hand codes over in person.</b> Show your screen or write the code on paper. Don't text, DM or email codes or the link.</li>
+            <li><b>Never post it.</b> No codes, prices, screenshots or links in group chats, stories, servers or anywhere online.</li>
+            <li><b>Don't explain how it works.</b> You don't need to say where activation happens or who keeps it running. "It just works" is enough.</li>
+            <li><b>Don't keep a buyer list.</b> This tab already shows which codes were used, and that's all you need.</li>
+          </ul></div>`)}
+      ${section('Selling in person', '', `<div class="tips">
+          ${tip('Make codes before you go', 'Make a few at home; they never expire. Write each one on its own slip of paper.')}
+          ${tip('Check their PC first', 'They need a Windows 10 or 11 PC at home that can stay on. Macs and Chromebooks can\'t run it, but they can watch and control that PC.')}
+          ${tip('Show, don\'t explain', 'Ten seconds of a stream on your phone sells it better than any description. Close anything personal first.')}
+          ${tip('Money first, code second', `Take the ${price} and count it before you give the code. No IOUs.`)}
+          ${tip('Activate together if you can', 'Then you both know it worked. If their PC is at home, they can type the code later; it doesn\'t expire.')}
+          ${tip('No code on you?', 'They can tap "Ask for access" on their Activate screen and type their name. Unlock it here as paid once they\'ve paid.')}
+          ${tip('If a code doesn\'t work', 'Codes never use 0, O, 1 or I, so check for those first. Still stuck? Cancel it here and make a new one.')}
+          ${tip('Pick a quiet moment', 'Somewhere you can talk without an audience, and not in the middle of class.')}
+        </div>`)}
+      ${section('Download link', 'Give this to buyers in person, or let them scan the QR code from your screen.', `<div class="card"><div class="statusline"><span class="msg mono sell-link">${link}</span><button class="btn small" data-action="copy" data-url="${link}">${icon('copy')}Copy</button><button class="btn small" data-action="qr" data-url="${link}">${icon('qr')}QR code</button></div></div>
+        <p class="sell-fine">Buyers download the installer there, run it on their Windows PC and type their code on the first screen. Windows may warn about an unrecognised app the first time: More info, then Run anyway.</p>`)}
+      ${section('Questions', '', `<div class="card faq">
+          <details><summary>It says the code was already used</summary><p>Each code works on one PC only. If it was typed on the wrong PC, there's no undo: they need a new code.</p></details>
+          <details><summary>They reinstalled the app or Windows</summary><p>Reinstalling the app on the same PC: the same code works again. A new PC, or a fresh Windows install, counts as a new PC and needs a new code.</p></details>
+          <details><summary>What do buyers get?</summary><p>The whole app: their PC's screen in any browser, with sound, mouse, keyboard and controllers, at home or away, plus every update.</p></details>
+          <details><summary>Can buyers sell it too?</summary><p>No. Normal copies can't make codes; only seller copies can.</p></details>
+          <details><summary>Someone wants it for free</summary><p>It doesn't run without a code, and every code is a sale. Saying no once is easier than explaining exceptions later.</p></details>
+          <details><summary>The activation server can't be reached</summary><p>Nothing is lost. Codes you already made still work once it's back; try again a bit later.</p></details>
+        </div>`)}`;
+  }
+
+  function showNewCodes(made, kind) {
+    const many = made.length > 1;
+    modal(`<h2>${many ? `${made.length} new codes` : kind === 'seller' ? 'New seller code' : 'New code'}</h2>
+      <p>${kind === 'seller' ? 'Whoever types this code gets a seller copy and can sell too.' : 'Give it to the buyer once they\'ve paid. It works once, on one PC, and never expires.'}</p>
+      <div class="bigcodes ${many ? 'many' : ''}">${made.map(c => `<div class="bigcode">${esc(c)}</div>`).join('')}</div>
+      <div class="foot"><button class="btn" data-copy-codes="1">${icon('copy')}${many ? 'Copy all' : 'Copy'}</button><button class="btn primary" data-close="1">Done</button></div>`,
+    e => { if (e.target.closest('[data-copy-codes]')) { beam.copy(made.join('\n')); toast(many ? 'Codes copied' : 'Code copied', 'ok'); } });
+    $('#modal .modal-card').classList.add('seller');
+  }
+
+  // Activation: a new copy asks for its code before anything else (closable from App & updates).
+  // No code? The person asks for access with their name instead and waits here; whoever
+  // unlocks it (the owner or a seller) marks it paid or free.
+  const ACT = { open: false, mode: 'code', closable: false, poll: null };
+  const fmtCode = v => { const s = String(v).toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 8); return s.length > 4 ? `${s.slice(0, 4)}-${s.slice(4)}` : s; };
+  const clock = t => new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+  function openActivate(closable = false) {
+    ACT.closable = closable;
+    const q = ST.license.request;
+    drawActivate(q && q.status === 'pending' ? 'wait' : q && (q.status === 'declined' || q.status === 'gone') ? 'declined' : 'code');
+  }
+
+  function drawActivate(mode) {
+    const L = ST.license, q = L.request || {};
+    ACT.open = true;
+    ACT.mode = mode;
+    clearInterval(ACT.poll);
+    ACT.poll = null;
+    const cancel = ACT.closable ? '<button class="btn" data-close="1">Cancel</button>' : '';
+    let html;
+    if (mode === 'ask') {
+      html = `<div class="act-icon">${icon('users')}</div><h2>Ask for access</h2>
+        <p>Your request goes to the people who sell Beam Remote. One of them can unlock this copy for you.</p>
+        <label class="act-label" for="req-name">Your name</label>
+        <input class="input" id="req-name" maxlength="40" placeholder="First name or nickname" autocomplete="off">
+        <label class="act-label" for="req-msg">Message <span class="faint">(optional)</span></label>
+        <input class="input" id="req-msg" maxlength="200" placeholder="Who sent you, or anything they should know" autocomplete="off">
+        <p class="act-sent">Sent with your request: this PC's name (<b>${esc(L.pcName)}</b>) and ${esc(L.osName)}. Nothing else.</p>
+        <p class="act-msg" id="act-msg" role="alert"></p>
+        <div class="foot"><button class="btn" data-act-mode="code">Back</button><button class="btn primary" data-req-send="1">Send request</button></div>`;
+    } else if (mode === 'wait') {
+      html = `<div class="act-icon"><span class="spin"></span></div><h2>Request sent</h2>
+        <p>Waiting for someone to unlock this copy. This updates by itself, and the app keeps checking from the tray if you close this window.</p>
+        <div class="act-req"><div><span>Name</span><b>${esc(q.name)}</b></div><div><span>Sent</span><b>${q.at ? `${day(q.at)}, ${clock(q.at)}` : ''}</b></div></div>
+        <div class="foot"><button class="btn ghost" data-req-cancel="1">Cancel request</button><span class="grow"></span><button class="btn" data-act-mode="code">I have a code</button></div>`;
+    } else if (mode === 'declined') {
+      html = `<div class="act-icon">${icon('alert')}</div><h2>Request not accepted</h2>
+        <p>Nobody unlocked this copy. You can send a new request, or type a code if you have one.</p>
+        <div class="foot">${cancel}<button class="btn" data-act-mode="code">I have a code</button><button class="btn primary" data-act-mode="ask">Send a new request</button></div>`;
+    } else {
+      const waiting = q.status === 'pending';
+      html = `<div class="act-icon">${icon('key')}</div><h2>Activate Beam Remote</h2>
+        <p>Type the activation code that came with your copy. Each code works on one PC.</p>
+        <input class="input code-input" id="act-code" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" spellcheck="false" aria-label="Activation code">
+        <p class="act-msg" id="act-msg" role="alert"></p>
+        <div class="foot"><button class="btn ghost" data-act-mode="${waiting ? 'wait' : 'ask'}">${waiting ? 'Back to my request' : 'No code? Ask for access'}</button><span class="grow"></span>${cancel}<button class="btn primary" data-act-go="1">Activate</button></div>`;
+    }
+    modal(html, onActivateClick);
+    $('#modal').dataset.locked = ACT.closable ? '' : '1';
+    setTimeout(() => { const i = $('#act-code') || $('#req-name'); if (i) i.focus(); }, 50);
+    if (mode === 'wait') { beam.licenseCheckRequest(); ACT.poll = setInterval(() => beam.licenseCheckRequest(), 15000); }
+  }
+
+  async function onActivateClick(e) {
+    const t = e.target;
+    const m = t.closest('[data-act-mode]');
+    if (m) { drawActivate(m.dataset.actMode); return; }
+    if (t.closest('[data-act-go]')) { activateWithCode(); return; }
+    if (t.closest('[data-req-send]')) { sendRequest(); return; }
+    if (t.closest('[data-req-cancel]')) {
+      await beam.licenseCancelRequest();
+      ST = { ...ST, ...(await beam.getState()) };
+      drawActivate('code');
+      toast('Request cancelled');
+    }
+  }
+
+  async function activateWithCode() {
+    const input = $('#act-code'), btn = $('[data-act-go]'), msg = $('#act-msg');
+    if (!input || !btn || btn.disabled) return;
+    btn.disabled = true; btn.textContent = 'Activating…'; msg.textContent = '';
+    const r = await beam.licenseActivate(input.value);
+    if (!r.ok) {
+      btn.disabled = false; btn.textContent = 'Activate'; msg.textContent = r.error || 'That code didn\'t work.';
+      input.focus(); input.select();
+      return;
+    }
+    ST = { ...ST, ...(await beam.getState()) };
+    activatedNow(r.kind === 'seller' ? 'Activated. This is a seller copy: open the Seller tab to start.' : 'Activated. Enjoy!');
+  }
+
+  async function sendRequest() {
+    const name = $('#req-name').value.trim(), message = $('#req-msg').value.trim();
+    const btn = $('[data-req-send]'), msg = $('#act-msg');
+    if (!name) { msg.textContent = 'Type your name first.'; $('#req-name').focus(); return; }
+    btn.disabled = true; btn.textContent = 'Sending…'; msg.textContent = '';
+    const r = await beam.licenseRequest({ name, message });
+    if (!r.ok) { btn.disabled = false; btn.textContent = 'Send request'; msg.textContent = r.error || 'The request wasn\'t sent. Try again.'; return; }
+    ST = { ...ST, ...(await beam.getState()) };
+    drawActivate('wait');
+  }
+
+  // Activated by a code or unlocked by someone: on to the password.
+  function activatedNow(text) {
+    if (!ACT.open) return;
+    ACT.open = false;
+    clearInterval(ACT.poll);
+    $('#modal').dataset.locked = '';
+    closeModal();
+    toast(text, 'ok');
+    renderNav();
+    render();
+    if (!ST.auth.passwordSet) openWizard();
+  }
+
+  $('#modal').addEventListener('input', e => {
+    if (e.target.id === 'act-code') e.target.value = fmtCode(e.target.value);
+    if (/^(act-code|req-name|req-msg)$/.test(e.target.id) && $('#act-msg')) $('#act-msg').textContent = '';
+  });
+  $('#modal').addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'act-code') activateWithCode();
+    else if (e.target.id === 'req-name' || e.target.id === 'req-msg') sendRequest();
+  });
+
+  function activationHtml() {
+    const L = ST.license || {};
+    const free = 'You had Beam Remote before copies cost money, so it stays free. You can sell copies in the Seller tab.';
+    const map = {
+      hub: ['good', 'Activation server', 'This PC makes and checks every code.'],
+      founder: ['good', 'Free for good', free],
+      seller: ['good', L.founder ? 'Free for good' : 'Seller copy', L.founder ? free : 'You can sell copies in the Seller tab.'],
+      user: ['good', 'Activated', 'Got a seller code? Enter it to sell copies too.'],
+      none: ['bad', 'Not activated', 'Enter the code that came with your copy.'],
+    };
+    const [dot, label, msg] = map[L.kind] || map.none;
+    return `<div class="card"><div class="statusline"><span class="dot ${dot}"></span><span class="label">${label}</span><span class="msg">${msg}</span>
+      ${L.kind === 'user' || L.kind === 'none' ? '<button class="btn small" data-action="activate">Enter a code</button>' : ''}${L.canSell ? '<button class="btn small" data-page-go="seller">Seller tab</button>' : ''}</div></div>`;
+  }
+
+  const PAGE_FNS = () => ({ home: pageHome, seller: pageSeller, remote: pageRemote, quality: pageQuality, security: pageSecurity, controllers: pageControllers, browser: pageBrowser, appearance: pageAppearance, app: pageApp, guide: pageGuide });
 
   // ------------------------------------------------------------ search
   // Finds any setting, section, button or help topic on every page. Matches open their page
@@ -809,6 +1124,8 @@
     brightness: ['brightness', 'picture adjustments'], contrast: ['contrast', 'picture adjustments'], filter: ['picture adjustments'], filters: ['picture adjustments'], saturation: ['saturation', 'picture adjustments'], sharpen: ['sharpness'],
     cursor: ['cursor', 'mouse'], keys: ['keyboard', 'key'], copy: ['clipboard'], paste: ['clipboard'],
     notification: ['notify'], notifications: ['notify'], log: ['log'], friends: ['domain', 'installer'],
+    sell: ['seller', 'code'], selling: ['seller', 'code'], code: ['code', 'activation'], codes: ['code'], license: ['activation', 'code'], activate: ['activation', 'code'],
+    money: ['price', 'paid', 'cash'], price: ['price'], pay: ['paid', 'price', 'cash'], cash: ['cash'], buyer: ['buyer', 'seller'], anonymous: ['anonymous'], secret: ['anonymous'],
   };
   let searchIndex = null, searchAt = 0, searchSel = 0, searchHits = [];
   const searchQuery = () => (($('#search') && $('#search').value) || '').trim();
@@ -817,7 +1134,7 @@
     const items = [];
     const doc = html => new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
     const text = el => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
-    for (const [id, name] of PAGES) {
+    for (const [id, name] of visiblePages()) {
       let d;
       try { d = doc(PAGE_FNS()[id]()); } catch { continue; }
       items.push({ page: id, kind: 'Page', title: name, text: text(d.querySelector('.page-head p')), section: '', target: null });
@@ -963,7 +1280,7 @@
   // ------------------------------------------------------------ actions
   $('#main').addEventListener('click', async e => {
     const go = e.target.closest('[data-page-go]');
-    if (go) { page = go.dataset.pageGo; renderNav(); render(); $('#main').scrollTop = 0; return; }
+    if (go) { e.preventDefault(); page = go.dataset.pageGo; renderNav(); render(); $('#main').scrollTop = 0; return; }
     const m = e.target.closest('[data-method]');
     if (m) {
       const id = m.dataset.method;
@@ -1024,6 +1341,48 @@
         else toast('The firewall rule wasn\'t added.', 'error');
         break;
       }
+      case 'sell-make': {
+        const kind = b.dataset.kind === 'seller' ? 'seller' : 'user';
+        b.disabled = true;
+        const r = await beam.sellerCodes('make', { count: Number(b.dataset.count) || 1, kind });
+        b.disabled = false;
+        if (r && Array.isArray(r.codes)) SELL.data = r;
+        if (r && r.ok && r.made) {
+          SELL.error = '';
+          showNewCodes(r.made, kind);
+          if (ST.license.kind === 'hub') SELL.hub = await beam.hubOverview();
+        } else toast((r && r.error) || 'No code was made. Try again.', 'error');
+        render();
+        break;
+      }
+      case 'sell-copy': await beam.copy(b.dataset.code); toast('Code copied', 'ok'); break;
+      case 'sell-cancel': {
+        if (!confirm(`Cancel ${b.dataset.code}? It stops working for good.`)) break;
+        const r = await beam.sellerCodes('cancel', { code: b.dataset.code });
+        if (r && Array.isArray(r.codes)) SELL.data = r;
+        if (!r || !r.ok) toast((r && r.error) || 'The code wasn\'t cancelled.', 'error');
+        else toast('Code cancelled', 'ok');
+        if (ST.license.kind === 'hub') SELL.hub = await beam.hubOverview();
+        render();
+        break;
+      }
+      case 'sell-refresh': await loadSell(true); if (!SELL.error) toast('Up to date', 'ok'); break;
+      case 'sell-more': SELL.showSold = !SELL.showSold; render(); break;
+      case 'req-unlock': case 'req-decline': {
+        b.disabled = true;
+        const unlock = act === 'req-unlock';
+        const r = await beam.sellerCodes(unlock ? 'unlock' : 'decline', { id: b.dataset.id, reason: b.dataset.reason });
+        if (r && Array.isArray(r.codes)) SELL.data = r;
+        if (r && r.ok) toast(unlock ? `Unlocked as ${b.dataset.reason}. Their copy activates within a minute.` : 'Request declined', 'ok');
+        else toast((r && r.error) || 'That didn\'t work. Try again.', 'error');
+        if (ST.license.kind === 'hub') SELL.hub = await beam.hubOverview();
+        render();
+        break;
+      }
+      case 'req-history': SELL.showHandled = !SELL.showHandled; render(); break;
+      case 'hub-seller': await beam.hubSeller(b.dataset.sid, { blocked: b.dataset.blocked === '1' }); SELL.hub = await beam.hubOverview(); render(); break;
+      case 'hub-pending': await beam.hubPending(b.dataset.pc, b.dataset.allow === '1'); SELL.hub = await beam.hubOverview(); render(); break;
+      case 'activate': openActivate(true); break;
       case 'open': beam.openExternal(url); break;
       case 'open-local': beam.testInBrowser(); break;
       case 'qr': showQr(url); break;
@@ -1115,6 +1474,8 @@
     };
   }
   function closeModal() {
+    ACT.open = false;
+    clearInterval(ACT.poll);
     const m = $('#modal');
     m.hidden = true; m.innerHTML = ''; m.onclick = null; m.dataset.locked = '';
     renderNav();

@@ -97,6 +97,8 @@
     // Frozen-picture recovery (see the watchdog below).
     keyAskedAt: 0, lastDecodedAt: 0, rtcProgressAt: 0, watchFrom: 0, frozenStep: 0, recoveries: [], decErrors: [],
     startTimer: null, startReason: null,
+    // Keeping up with PC updates (see matchPcVersion).
+    pageVersion: null, reloadedNote: null, versionNoted: null,
     ping: { id: 0, rtt: null, samples: [], offset: 0, synced: false },
     stats: {}, history: { ping: [], lat: [], fps: [] },
     pressed: new Set(), buttons: new Set(), rel: { x: 0, y: 0 }, wheel: { y: 0, x: 0, pending: false },
@@ -159,8 +161,42 @@
       return;
     }
     S.info = info;
+    S.pageVersion = info.version || null;
+    try { if (sessionStorage.getItem(RELOAD_NOTE_KEY)) { sessionStorage.removeItem(RELOAD_NOTE_KEY); S.reloadedNote = info.version; } } catch { /* blocked */ }
     applyAppearance({ ...info.appearance, appName: info.appName, welcomeText: info.welcomeText });
     if (info.signedIn) startSession(); else showLogin();
+  }
+
+  // ------------------------------------------------------------ keeping up with PC updates
+  // The page's version is the PC's version when the page loaded. When the PC comes back on a
+  // different version (it was updated), the page reloads itself once to get the new page code,
+  // and stays signed in (the sign-in is kept in this tab's storage). Where the browser keeps
+  // the sign-in in memory only, or can't remember that it already reloaded, the page asks
+  // instead, so nobody is signed out and a reload can never repeat.
+  const RELOAD_KEY = 'beam.reloadedFor', RELOAD_NOTE_KEY = 'beam.reloadNote';
+  function signInSurvivesReload() {
+    const t = getToken();
+    if (!t) return true; // signed in by cookie
+    return stores().some(s => { try { return s.getItem(TOKEN_KEY) === t; } catch { return false; } });
+  }
+  function matchPcVersion(v) {
+    if (!v || !S.pageVersion || v === S.pageVersion) return false;
+    let ok = signInSurvivesReload();
+    if (ok) {
+      try {
+        if (sessionStorage.getItem(RELOAD_KEY) === v) ok = false; // reloaded for this version once already
+        else { sessionStorage.setItem(RELOAD_KEY, v); sessionStorage.setItem(RELOAD_NOTE_KEY, '1'); ok = sessionStorage.getItem(RELOAD_KEY) === v; }
+      } catch { ok = false; }
+    }
+    if (!ok) {
+      if (S.versionNoted !== v) { S.versionNoted = v; toast(`Your PC was updated to ${v}. Reload this page to get its newest version.`); }
+      return false;
+    }
+    S.intentional = true; // a planned reload, not a dropped connection
+    const ws = S.ws; S.ws = null;
+    try { if (ws) ws.close(1000, 'page update'); } catch { /* ignore */ }
+    location.reload();
+    return true;
   }
 
   function showLogin(msg) {
@@ -168,8 +204,12 @@
     $('#stream').hidden = true;
     $('#login').hidden = false;
     document.querySelector('.backdrop').hidden = false;
-    const setup = S.info ? S.info.setup : true;
+    const activated = !S.info || S.info.activated !== false;
+    const setup = (S.info ? S.info.setup : true) && activated;
     $('#not-setup').hidden = setup;
+    $('#not-setup').textContent = activated
+      ? 'This PC hasn\'t been set up yet. Open the app on the PC, choose a password, then refresh this page.'
+      : 'This copy of Beam Remote isn\'t activated yet. Open the app on the PC, enter its activation code, then refresh this page.';
     $('#login-fields').hidden = !setup;
     $('#totp-field').hidden = !(S.info && S.info.totp);
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
@@ -342,6 +382,7 @@
   function onMessage(m) {
     switch (m.t) {
       case 'welcome':
+        if (matchPcVersion(m.version)) return; // the PC was updated: reload into the new page
         padsForget(); // a new session on the PC: controllers are announced again
         S.resume = { id: m.id, key: m.resumeKey };
         S.reconnectTries = 0; S.updating = false;
@@ -351,6 +392,7 @@
         startTransport();
         break;
       case 'resumed':
+        if (matchPcVersion(m.version)) return;
         S.resume = { id: m.id, key: m.resumeKey };
         S.reconnectTries = 0; S.updating = false;
         hideNetNote();
@@ -529,6 +571,7 @@
       toast(`Connected · ${S.transport === 'webrtc' ? 'direct (WebRTC)' : 'web stream (WebSocket)'}`);
       if (cfg('toolbar') !== 'hidden') showToolbar(3000);
     }
+    if (S.reloadedNote) { toast(`Your PC was updated to ${S.reloadedNote}, so this page reloaded itself to match.`); S.reloadedNote = null; }
   }
 
   // ------------------------------------------------------------ WebRTC
